@@ -63,7 +63,8 @@ Fixpoint ctype_eq (x y: ctype) {struct x} : bool  :=
   let fix process (xs ys: seq ctype) := match xs,ys with
                                       | nil, nil => true
                                       | x::xs, y::ys => ctype_eq x y && process xs ys
-                                      | _,_ => false
+                                      | _, nil
+                                      | nil, _ => false
                                     end in                                      
   match x, y with
     | Int8, Int8
@@ -78,11 +79,15 @@ Fixpoint ctype_eq (x y: ctype) {struct x} : bool  :=
     | ErrorType, ErrorType => true
     | Pointer px, Pointer py => ctype_eq px py
     | Struct (x::xs), Struct (y::ys) => ctype_eq x y && process xs ys
+    | Struct nil, Struct nil => true
     | _, _ => false
 end.
 
 Lemma eq_ptr: forall x:ctype, ctype_eq (Pointer x) x = false.
 Proof. by elim. Qed.
+
+Lemma eq_ptr_r: forall x:ctype, ctype_eq x (Pointer x) = false.
+Proof. elim =>//=. by case. Qed.    
 
 Lemma eq_ptr': forall x:ctype, ~ Pointer x = x.
 Proof.  rewrite /not. elim; congruence. Qed.
@@ -101,7 +106,7 @@ Proof. by move=> x y; split; [ congruence | move ->]. Qed.
 
 Local Lemma eq_ptr_bool: forall (x y: ctype), ctype_eq (Pointer x) (Pointer y) <-> ctype_eq x y .
 Proof. by []. Qed. 
-
+(*
 Lemma ctype_eq_sym: symmetric ctype_eq.
 Proof.
   rewrite /symmetric.
@@ -171,15 +176,72 @@ Proof.
       ase z; try by []. by case.  simpl. 
     rewrite <-H3.
 
+*)
 
-
-
-        
 Lemma ctype_eqP: Equality.axiom ctype_eq.
   move=> x y.
   elim x; elim y; try do [by constructor | elim; by constructor].
   (* Eliminates simple cases like Int8 = Int8 or Int8 <> Int8 *)  
-  * clear x y. move=>x H1.  move =>y H2.
+  * clear x y. move=> x H1 y H2. (* :((( *) 
+    destruct (ctype_eq (Pointer y) (Pointer x)) eqn: Heq.
+    apply ReflectT.
+    simpl  in Heq.
+    move: (H1 y) => H3.
+    rewrite Heq in H3.
+    Check ReflectT.
+    ReflectT in H3. 
+    
+    
+    simpl.
+    
+    move=>x H1 y H2.
+    simpl.
+    
+    move: H2 (Pointer x).
+    move => H' z.
+    admit.
+
+  * clear x y. move=> x H [] => //=; by constructor.
+  * clear x y. move=> xs ys. elim xs; elim ys; try  by constructor.
+    + move=> x ts H1.  simpl.
+    
+    
+    intros.
+    
+    have Heq:(ctype_eq y x = true) \/ (ctype_eq y x = false ).
+    Check orP.
+    Print orP.
+    apply orP.
+    apply /orP.
+      by case (ctype_eq y x).
+    move /eqP in Heq.
+    
+    inversion Heq.
+    move /orP in Heq. inversion in Heq. destruct Heq.
+    rewrite /orP in Heq.
+    simpl.
+    move /eqP.
+    apply negPf.
+    rewrite . orbN.
+    
+    destruct (ctype_eq y x)  [Htrue | Hfalse].
+    
+    case: (ctype_eq y x).
+    apply ReflectT.
+    
+    constructor.
+    
+    congruence.
+    
+    simpl.
+    
+    apply ReflectT.
+    rewrite eq_ptr_prop. (* WTF ? *)
+    
+    
+    rewrite /ctype_eq.
+    
+    ove =>y H2.
     generalize dependent y. 
 
     Print reflect.

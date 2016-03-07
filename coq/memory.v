@@ -3,7 +3,7 @@ Require Import mathcomp.ssreflect.ssrnat.
 Require Import mathcomp.ssreflect.seq.
 Require Import mathcomp.algebra.ssrint.
 
-Module bspc.
+Module Memory.
 
   
 (* C language types *)
@@ -46,18 +46,18 @@ Inductive Block := mk_block {
                        contents: seq (value el_type)
                               }.
 
-End bspc.
-
 
 (* Examples *)
 
+Definition block1 := mkblock 
+Check mk_block Stack 0 1024 (Struct [:: Int8; Int32]) [:: (Va].
 
 (* struct { char c; int t [4]; } mystruct *)
 
-Definition block_char := mk_block Stack 0 1 Int8 [:: (Garbage Int8) ].
-Definition block_int := mk_block Stack 1 16 Int32 [:: Garbage Int32 ; Garbage Int32;  Garbage Int32 ; Garbage Int32 ].
-Definition mystruct := Value (Struct [:: Int8; Int32] ) [:: 0 ; 1].
+Definition example_block_char := mk_block Stack 0 1 Int8 [:: (Garbage Int8) ].
+Definition example_block_int := mk_block Stack 1 16 Int32 [:: Garbage Int32 ; Garbage Int32;  Garbage Int32 ; Garbage Int32 ].
+Definition example_mystruct := Value (Struct [:: Int8; Int32] ) [:: 0 ; 1].
 
 
 
-End bspc.
+End Memory.
