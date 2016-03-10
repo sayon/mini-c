@@ -62,7 +62,7 @@ Section TypeSystem.
       | _, _ => false
     end.
 
-  Lemma Struct_cons: forall x xs y ys, Struct xs = Struct ys /\ x = y <-> Struct (x::xs) = Struct (y::ys).
+  Local Lemma Struct_cons: forall x xs y ys, Struct xs = Struct ys /\ x = y <-> Struct (x::xs) = Struct (y::ys).
     move=> x xs y ys.
     split.
       by move=> [[]] => -> ->.
@@ -76,60 +76,43 @@ Section TypeSystem.
     move=> x.
     elim x; try do [ by case; constructor ].
     (* Pointer *)
-    move=> c H y; elim y; try do [by constructor].
-    move => z H2 //=. 
-    move: (ctype_eq c z) (H z) => [] [].
-    - by move=>->; apply ReflectT.
-    - by move=> *; apply ReflectF; case.
-    - by move=>->; apply ReflectT.
-    - by move=> *; apply ReflectF; case.
-      move =>l y.
-      elim y; try by constructor.
+    - move=> c H y; elim y; try do [by constructor].
+      move => z H2 //=. 
+      move: (ctype_eq c z) (H z) => [] [].
+      + by move=>->; apply ReflectT.
+      + by move=> *; apply ReflectF; case.
+      + by move=>->; apply ReflectT.
+      + by move=> *; apply ReflectF; case.
+    (* Struct *)
+    - move =>l.
+      elim ; try by constructor.
       
-      clear x y. move => m.
-      elim: l m.
-      case. by apply ReflectT.
-      by move=> a l; apply ReflectF.
-      move=> a l H [].
-      by apply ReflectF.
-      move=> b m.
-      move: (H m) => Hm.
-      inversion Hm.
-      destruct (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Heq.
-      apply ReflectT.
-      apply Struct_cons.
-      split.
-      exact H1.
-      simpl in Heq.
-      move: (ctype_eqP a b) => Hr.
-      inversion Hr. exact H3.
-      rewrite <- H2 in Heq.
-      
-      simpl in Heq.
-      inversion Heq.
-      apply ReflectF.
-      move=> Hc.
-      move: (H m) => Heq'.
-      move: (ctype_eqP a b) => Hab.
-      inversion Hab.
-      simpl in Heq.
-      rewrite <- H2 in Heq.
-      simpl in Heq.
-      rewrite <-H0 in Heq.
-      inversion Heq.
-      inversion Hc.
-      exact (H3 H5).
-
-      destruct  (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Hsab; [apply ReflectT| apply ReflectF].
-
-      simpl in Hsab.
-      rewrite <-H0 in Hsab.
-      rewrite Bool.andb_false_r in Hsab. inversion Hsab.
-
-      move=> Heq.
-      inversion Heq.
-      rewrite H4 in H1.      
-      by apply H1.
+      clear x. 
+      elim: l.
+      + case; by [apply ReflectT | move=> a l; apply ReflectF]. 
+      + move=> a l H []; first by apply ReflectF.
+        move=> b m.
+        move: (H m) => Hm.
+        inversion  Hm as [Hstructs Hstreq| Hstructs Hstreq].
+        * destruct (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Heq_str_big.
+          ** apply ReflectT. apply Struct_cons.
+             simpl in Heq_str_big.
+             split; first by exact Hstructs.
+             destruct (ctype_eqP a b) as [Hab|Hab]; [ by exact Hab| by exfalso].
+       * apply ReflectF => H_str_big. move: (H m) => Hrefl_eqlm.
+             move: (ctype_eqP a b) => Hrefl_ab.
+             inversion Hrefl_ab as [Hab Heq_ab|Hab Heq_ab].
+             simpl in Heq_str_big. rewrite <- Heq_ab in Heq_str_big. 
+             simpl in Heq_str_big. rewrite <-Hstreq in Heq_str_big.
+             by inversion Heq_str_big.
+       * inversion H_str_big. by exact (Hab H1).
+         destruct  (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Hsab; [apply ReflectT| apply ReflectF].
+         ** simpl in Hsab.
+         rewrite <-Hstreq in Hsab.
+         rewrite Bool.andb_false_r in Hsab. by inversion Hsab.
+         **  move=> Heq.
+             inversion Heq.
+             rewrite H2 in Hstructs. by exfalso.  
   Qed.      
 
   Canonical ctype_eqMixin := EqMixin ctype_eqP.
