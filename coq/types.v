@@ -17,6 +17,28 @@ Inductive ctype :=
 | Struct: seq ctype -> ctype
 | Bot | ErrorType.
 
+Definition Int8 := Int S8.
+Definition UInt8 := Int U8.
+Definition Int16 := Int S16.
+Definition UInt16 := Int U16.
+Definition Int32 := Int S32.
+Definition UInt32 := Int U32.
+Definition Int64 := Int S64.
+Definition UInt64 := Int U64.
+
+
+Fixpoint SizeOf (t:ctype) :=
+    match t with 
+    | Pointer _ => 8
+    | Struct els => foldl (fun x y=>x + y) 0 (map SizeOf els) 
+    | Int S8 | Int U8 => 1
+    | Int S16 | Int U16 => 2
+    | Int S32 | Int U32 => 4
+    | Int S64 | Int U64 => 8
+    | _ => 0
+    end.
+
+
 Theorem ctype_better_ind (P: ctype -> Prop):
 (forall nt, (P (Int nt)))->
 (forall p: ctype, P p -> P (Pointer p) ) ->

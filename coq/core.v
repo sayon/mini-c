@@ -2,124 +2,8 @@ From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
 From mathcomp.algebra Require Import ssrint.
 From Coq.Strings Require Import Ascii String.
 
-
-Module BSPC.
-Section TypeSystem.
-  (* Utility from Coq lists we need for induction *) 
-  Fixpoint In {A:Type} (a:A) (l: seq A) : Prop :=
-    match l with
-      | [::] => False
-      | b :: m => b = a \/ In a m
-    end.
-  
-  Inductive ctype :=
-  | Int8 | UInt8 | Int16 | UInt16 | Int32 | UInt32 | Int64 | UInt64 
-  | Pointer : ctype -> ctype
-  | Struct: seq ctype -> ctype
-  | Bot | ErrorType.
-
-  Theorem ctype_better_ind (P: ctype -> Prop):
-    (P Int8) -> (P UInt8) -> (P Int16) -> (P UInt16) ->
-    (P Int32) -> (P UInt32) -> P (Int64) -> P (UInt64) ->
-    (forall p: ctype, P p -> P (Pointer p) ) ->
-    (forall l, (forall e, In e l -> P e) -> P (Struct l)) ->
-    (P Bot) -> (P ErrorType) ->
-    (forall t:ctype, P t).
-  Proof.
-    move=> Hi8 Hui8 Hi16 Hui16 Hi32 Hui32 Hi64 Hui64 Hptr Hstr Hbot Herr.
-    fix 1.
-    have StructProof: forall l : seq ctype, P (Struct l). {
-      move=> l. apply Hstr. elim: l.
-      + by move=> _ [].
-      + move=> a l Hin e /= [].
-        * by move=><-; exact (ctype_better_ind a).
-        * apply Hin.
-    }    
-    move=>[]; try by [clear ctype_better_ind].
-    - elim; try by [ clear ctype_better_ind; try move=> c; apply Hptr].
-  Qed.
-  
-  Fixpoint ctype_eq (x y: ctype) {struct x} : bool  :=
-    let fix process (xs ys: seq ctype) := match xs,ys with
-                                            | nil, nil => true
-                                            | x::xs, y::ys => ctype_eq x y && process xs ys
-                                            | _, nil
-                                            | nil, _ => false
-                                          end in                                      
-    match x, y with
-      | Int8, Int8
-      | UInt8, UInt8
-      | Int16, Int16
-      | UInt16, UInt16
-      | Int32, Int32
-      | UInt32, UInt32
-      | Int64, Int64
-      | UInt64, UInt64
-      | Bot, Bot
-      | ErrorType, ErrorType => true
-      | Pointer px, Pointer py => ctype_eq px py
-      | Struct xs, Struct ys => process xs ys
-      | _, _ => false
-    end.
-
-  Local Lemma Struct_cons: forall x xs y ys, Struct xs = Struct ys /\ x = y <-> Struct (x::xs) = Struct (y::ys).
-    move=> x xs y ys.
-    split.
-      by move=> [[]] => -> ->.
-      by move=> [] -> ->.
-  Qed.      
-    
-  Lemma ctype_eqP: Equality.axiom ctype_eq.
-  Proof.
-    rewrite /Equality.axiom.
-    fix 1.
-    move=> x.
-    elim x; try do [ by case; constructor ].
-    (* Pointer *)
-    - move=> c H y; elim y; try do [by constructor].
-      move => z H2 //=. 
-      move: (ctype_eq c z) (H z) => [] [].
-      + by move=>->; apply ReflectT.
-      + by move=> *; apply ReflectF; case.
-      + by move=>->; apply ReflectT.
-      + by move=> *; apply ReflectF; case.
-    (* Struct *)
-    - move =>l.
-      elim ; try by constructor.
-      
-      clear x. 
-      elim: l.
-      + case; by [apply ReflectT | move=> a l; apply ReflectF]. 
-      + move=> a l H []; first by apply ReflectF.
-        move=> b m.
-        move: (H m) => Hm.
-        inversion  Hm as [Hstructs Hstreq| Hstructs Hstreq].
-        * destruct (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Heq_str_big.
-          ** apply ReflectT. apply Struct_cons.
-             simpl in Heq_str_big.
-             split; first by exact Hstructs.
-             destruct (ctype_eqP a b) as [Hab|Hab]; [ by exact Hab| by exfalso].
-       * apply ReflectF => H_str_big. move: (H m) => Hrefl_eqlm.
-             move: (ctype_eqP a b) => Hrefl_ab.
-             inversion Hrefl_ab as [Hab Heq_ab|Hab Heq_ab].
-             simpl in Heq_str_big. rewrite <- Heq_ab in Heq_str_big. 
-             simpl in Heq_str_big. rewrite <-Hstreq in Heq_str_big.
-             by inversion Heq_str_big.
-       * inversion H_str_big. by exact (Hab H1).
-         destruct  (ctype_eq (Struct (a :: l)) (Struct (b :: m))) eqn: Hsab; [apply ReflectT| apply ReflectF].
-         ** simpl in Hsab.
-         rewrite <-Hstreq in Hsab.
-         rewrite Bool.andb_false_r in Hsab. by inversion Hsab.
-         **  move=> Heq.
-             inversion Heq.
-             rewrite H2 in Hstructs. by exfalso.  
-  Qed.      
-
-  Canonical ctype_eqMixin := EqMixin ctype_eqP.
-  Canonical ctype_eqType := EqType ctype ctype_eqMixin.
-
-End TypeSystem.
-
+Require Import types.
+Require Import UtilString.
 
 Definition block_id := nat. Definition block_offset := nat.
 
@@ -127,36 +11,59 @@ Record ptr (t: ctype) := mk_ptr { number: block_id; offset: block_offset; }.
 Inductive storage := | Heap | Stack | Data | Text | ReadOnlyData.
 Fixpoint coq_type (t: ctype) : Set :=
   match t with
-    | Int8 | UInt8 | Int16 | UInt16 | Int32 | UInt32 | Int64 | UInt64 => int
+    | Int _ => int
     | Pointer t => ptr t
     | Struct ls => seq nat
     | Bot => unit
     | Error => False
   end.
 
-Inductive value (t: ctype) : Set := | Value : coq_type(t) -> value t | Garbage | Deallocated.
+Inductive value (t: ctype) : Set := | Value (v: coq_type(t)) | Garbage | Deallocated.
 Inductive block := mk_block {
                        region: storage;
                        id: block_id;
                        size: nat;
                        el_type: ctype;
                        contents: seq (value el_type)
-                              }.
-Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr .
-Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype).
-Inductive expr :=
-| Binop: binop -> expr -> expr -> expr 
-| Unop: unop -> expr-> expr
-| Lit t: value t->expr
-| Var : string -> expr
-| Call: block_id -> seq expr -> expr.
-(* we implicitly provide a pointer to a block to write result into *)
+                     }.
 
 Record var_descr := declare_var { var_name: string; var_type: ctype }.
+Definition var_descr_beq (x y: var_descr) : bool :=
+(  (var_name x) == (var_name y) ) && ((var_type x) == (var_type y)).
+
+Theorem var_descr_eqP: Equality.axiom var_descr_beq.
+Proof.
+  rewrite /Equality.axiom.
+  move=> x y.
+  case (var_descr_beq x y) eqn:H; constructor;
+  destruct x ; destruct y;
+  move: H; rewrite /var_descr_beq.
+  by move /andP =>[] /= => /eqP -> => /eqP ->.
+  move /andP => H. rewrite /not in H. move=> H'.  apply H. by inversion H'. 
+Qed.
+
+Canonical var_descr_eqMixin := EqMixin var_descr_eqP.
+Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
+
+  
+Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr .
+Scheme Equality for binop.
+
+Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asterisk .
+(* Scheme Equality for unop. Needs coq fix *)
+
+Inductive expr :=
+| Lit   (t:ctype) (_:coq_type(t))
+| Var   (_:string)
+| Binop (_:binop) (_ _: expr)
+| Unop  (_:unop)  (_: expr)
+| Call (_: string) (_: seq expr).
+
+
 Inductive statement :=
 | Skip
 | Assign: var_descr -> expr -> statement
-| Alloc: storage -> ctype -> nat -> statement
+| Alloc: storage -> ctype -> option string -> nat -> statement
 | If: expr -> statement -> statement -> statement
 | For: statement -> expr -> statement -> statement -> statement
 | While: expr -> statement -> statement
@@ -164,22 +71,64 @@ Inductive statement :=
 
 Record function := mk_fun{
                        fun_id: block_id;
+                       fun_name: string;
                        args: seq ctype;
                        returns: ctype;
                        body: seq statement;
                      }.
 Record static_ctx := mk_static_ctx {
-                        functions: seq (string * function);
+                        functions: seq function;
                         variables: seq (seq var_descr);
                       }.
 Record dynamic_ctx := mk_prog { memory: seq block }.
 
+Record state : Set := mk_state { static: static_ctx; dynamic: dynamic_ctx }.
+
+
+Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
+  nth None (map (@Some T) s) (find (option_map p) (map (@Some T) s)).
+
+
+Definition get_var (sc:static_ctx) (name:string) : option var_descr :=
+  option_find (fun p: var_descr => var_name p == name) (flatten (variables sc)).
+
+
+Definition get_fun (sc:static_ctx) (name:string) : option function :=
+  option_find (fun p: function => fun_name p == name) (functions sc).
+
+Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
+  match e with
+    | Lit t _ => t
+    | Var name => match get_var sc name with
+                    | Some v => var_type v
+                    | None => ErrorType
+                  end
+                    
+    | Binop Add l r
+    | Binop Sub l r
+    | Binop Mul l r
+    | Binop Div l r =>
+      if @type_solver sc l == @type_solver sc r then @type_solver sc l else Bot
+    | Binop _ l r => Bot
+    | Unop _ o => @type_solver sc o
+    | Call name cargs =>
+      match get_fun sc name with
+          | None => ErrorType
+          | Some f => if (map (@type_solver sc) cargs == args f) then returns f else Bot
+      end
+        
+                            
+  end.
 
 
 
-(* Need to be able to compare types *)
-Fixpoint type_solver {code: static_ctx}  (e: expr) : ctype:= Bot.
+Definition LocVar t name := Alloc Stack t (Some name%string) 1. 
+Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
+Definition ex2 := LocVar Int8 "x" .
+Definition ex3 := LocVar (Pointer Int8) "y".
 
+
+(*Fixpoint interpreter_step {program:static_ctx} {runtime:dynamic_ctx} (s: statement) {struct ident} : dynamic_ctx := .*)
 
 
 
@@ -189,7 +138,6 @@ Fixpoint type_solver {code: static_ctx}  (e: expr) : ctype:= Bot.
 
                               
 (*
-
 
 Fixpoint option_function (p: function -> bool) (functions: seq (string*function)) : option function :=
   match functions with
