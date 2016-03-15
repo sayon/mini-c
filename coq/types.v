@@ -2,6 +2,8 @@ From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
 
 (* Utility from Coq lists we need for induction *)
 
+Module Bspc.
+
 Fixpoint In {A:Type} (a:A) (l: seq A) : Prop :=
 match l with
   | [::] => False
@@ -9,7 +11,7 @@ match l with
 end.
 
 Inductive numeric := | S8 | U8 | S16 | U16 | S32 | U32 | S64 | U64 .
-
+Scheme Equality for numeric.
                        
 Inductive ctype :=
 | Int (_:numeric) 
@@ -59,7 +61,6 @@ Proof.
 - elim; try by [ clear ctype_better_ind; try move=> c; apply Hptr].
 Qed.
 
-Scheme Equality for numeric.
 
 Fixpoint ctype_beq (x y: ctype) {struct x} : bool  :=
 let fix process (xs ys: seq ctype) := match xs,ys with
@@ -132,7 +133,13 @@ Qed.
 Canonical ctype_eqMixin := EqMixin ctype_eqP.
 Canonical ctype_eqType := EqType ctype ctype_eqMixin.
 
+Theorem numeric_eqP: Equality.axiom numeric_beq.
+Proof. by case; case; constructor. Qed.
+
+Canonical numeric_eqMixin := EqMixin numeric_eqP.
+Canonical numeric_eqType := EqType numeric numeric_eqMixin.
+
 (*Definition int_union (x y: numeric) : numeric := match x,y with *)
 
 
- 
+End Bspc.
