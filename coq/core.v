@@ -1,11 +1,11 @@
 From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
 From mathcomp.algebra Require Import ssrint ssralg.
 From Coq.Strings Require Import Ascii String.
-Require Import Program.
+Require Import Coq.Program.Program.
 Require Import types.
 Require Import UtilString.
 Import Bspc.
-
+Import intZmod.
 
 Definition block_id := nat. Definition block_offset := nat.
 
@@ -101,8 +101,23 @@ Definition get_var (sc:static_ctx) (name:string) : option var_descr :=
 Definition get_fun (sc:static_ctx) (name:string) : option function :=
   option_find (fun p: function => fun_name p == name) (functions sc).
 
+Definition eq_value_or_error {A:Type} (tl tr: ctype) (v: ctype -> ctype -> A) (err: A):A :=
+ match tl, tr  with
+    |Int S8, Int S8 
+    |Int U8, Int U8 
+    |Int S16, Int S16 
+    |Int U16, Int U16 
+    |Int S32, Int S32 
+    |Int U32, Int U32 
+    |Int S64, Int S64 
+    |Int U64, Int U64 => v tl tr
+    | _, _=> err 
+  end
+. 
 
-Definition eq_or_err (tl tr: ctype) : ctype :=
+Definition eq_or_err (tl tr: ctype) := eq_value_or_error tl tr (fun  x _ => x) ErrorType.
+
+(*Definition eq_or_err (tl tr: ctype) (v: ctype -> ctype -> ctype): ctype :=
   match tl, tr  with
     |Int S8, Int S8 => Int S8
     |Int U8, Int U8 => Int U8
@@ -114,7 +129,7 @@ Definition eq_or_err (tl tr: ctype) : ctype :=
     |Int U64, Int U64 => Int U64
     | _, _=> ErrorType
   end
-.
+.*)
 
 
 Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
@@ -141,6 +156,17 @@ Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
         
                             
   end.
+ 
+
+(* Useful lemmas *)
+(*
+Lemma binop_preserves_type e op l r ctx kind : e = Binop op l r -> @type_solver ctx e = Int kind ->
+                                               @type_solver ctx l = Int kind /\ @type_solver ctx r = Int kind.
+Proof.
+  move => -> //=.
+  by case op; case (@type_solver ctx r);  case (@type_solver ctx l); do [case;case| case | done ].
+Qed.  
+*)
 
 
 
@@ -148,68 +174,74 @@ Definition LocVar t name := Alloc Stack t (Some name%string) 1.
 Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
 Definition ex2 := LocVar Int8 "x" .
 Definition ex3 := LocVar (Pointer Int8) "y".
-
 Definition ex_literal := Lit Int64 (Negz 4).
 
-Definition prog_state: Set := static_ctx * dynamic_ctx.
-Locate addz.
-Print coq_type.
-Print value.
-Definition cct (A : ctype) (B : Set) (a: coq_type A) (H: (coq_type A) = B) : B.
-  rewrite H in a.
-  exact a.
-Qed.
+Definition neg_expr := Unop Neg ex_literal.
+Definition add_expr := Binop Add neg_expr ex_literal. 
 
+
+Definition prog_state: Set := static_ctx * dynamic_ctx.
+Definition state_empty := (static_ctx_empty, dynamic_ctx_empty).
+
+(*Definition cst {A B : Type} (a : A) (H : A = B) := eq_rect A (fun B0 : Type => B0) a B H.*)
 Definition cast {A B : Type} (a: A ) (H: A= B ) : B.
   by rewrite <- H.
-Qed.
+Defined.
+(*Notation "' x " := (cast x _) (at level 3, left associativity).*)
 
+Program Definition binop_interp (t:ctype) (op: binop) : int -> int -> value t :=
+  match t with |
+            Int kind =>
+            match op with
+              |Add => fun x y=> @Value t (cast (addz x y ) _) 
+              | _ => (fun _ _ => Error _)
+            end
+            | _ => (fun _ _ => Error _)
+  end
+.
 
-Program Fixpoint interpreter_expr (e:expr) (s:prog_state) : value (@type_solver (fst s) e) :=
-(*  let type_of := @type_solver (fst s) in*)
-(*  let ret_type := value (type_of e) in *)
-  match e as e' return value (@type_solver (fst s) e') with 
-    | Lit t v => Value t v
-    | Binop Add l r =>
-        match @type_solver (fst s) l as tl, @type_solver (fst s) r as tr
-              return (
-                @type_solver (fst s) l = tl ->
-                @type_solver (fst s) r = tr->
-                value ( eq_or_err tl tr )
-                     )
-        with
-          | Int S64, Int S64 => fun Htl Htr=> match interpreter_expr l s, interpreter_expr r s 
-                                              with               
-                                                | Value x, Value y => Value (Int S64) (intZmod.addz (cast x _) (cast y _))
-                                                | _, _  => Error _
-                                              end
-            (*| Int S32, Int S32 => Value Int32 (Negz 4)
-            | Int S16, Int S16 => Value Int16 (Negz 4)
-            | Int S8, Int S8 => Value Int8 (Negz 4)
-            | Int U64, Int U64 => Value UInt64 (Negz 4)
-            | Int U32, Int U32 => Value UInt32 (Negz 4)
-            | Int U16, Int U16 => Value UInt16 (Negz 4)
-            | Int U8, Int U8 => Value UInt8 (Negz 4)*)
-            | _, _ => fun Htl Htr=> Error _
-          end _ _ 
-            
+Program Definition unop_interp (t:ctype) (op: unop) : int -> value t :=
+  match t with |
+            Int kind =>
+            match op with
+              |Neg => fun x => @Value t (cast (oppz x) _) 
+              | _ => (fun _ => Error _)
+            end
+            | _ => (fun _ => Error _)
+  end
+.
+
+Compute binop_interp Int64 Add (Posz 4) (Posz 9).
+Check option_find.
+Check variables.
+Program Fixpoint iexpr (s:prog_state) (e:expr): value (@type_solver (fst s) e) :=
+  let interp := iexpr s in
+  let type := @type_solver (fst s) in
+  let ret_type := value (type e) in
+  let vars := flatten (variables (fst s) ) in
+  match e  wi                             | _ , _, _ => fun _ _ => Error _
+                           end _ _
+                         | _, _ => Error _
+                          end
     | _ => Error _
   end
-  .
-
-  Next Obligation.
-    by rewrite Htl.
-  Defined.
-  Next Obligation.
-      by rewrite Htr.
-  Defined.
+.
 
 
-  Eval compute in interpreter_expr ex_literal (pair static_ctx_empty dynamic_ctx_empty).
+Next Obligation. by rewrite Hto. Defined.
+Next Obligation. by rewrite Htl. Defined.
+Next Obligation. by rewrite Htr. Defined.
+Solve Obligations with done.
+
+
+Eval compute in iexpr (static_ctx_empty, dynamic_ctx_empty) neg_expr.
+(* Almost there, the ``types`` are not computed tho *)
+Compute iexpr (static_ctx_empty, dynamic_ctx_empty) add_expr.
+
+Eval compute in interpreter_expr ex_literal (pair static_ctx_empty dynamic_ctx_empty).
 
       
                
-
 
 
 
@@ -229,3 +261,4 @@ Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
       
   end.
 
+              
