@@ -1,5 +1,6 @@
 From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
 
+Require Import Common.
 (* Utility from Coq lists we need for induction *)
 
 Module Bspc.
@@ -141,57 +142,6 @@ Canonical numeric_eqType := EqType numeric numeric_eqMixin.
 
 (*Definition int_union (x y: numeric) : numeric := match x,y with *)
 
-
-
-
-Definition eq_or_err (tl tr: ctype) : ctype :=
-  match tl, tr  with
-    |Int S8, Int S8 => Int S8
-    |Int U8, Int U8 => Int U8
-    |Int S16, Int S16 => Int S16
-    |Int U16, Int U16 => Int U16
-    |Int S32, Int S32 => Int S32
-    |Int U32, Int U32 => Int U32
-    |Int S64, Int S64 => Int S64
-    |Int U64, Int U64 => Int U64
-    | _, _=> ErrorType
-  end
-.
-
-
-Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
-  let slv := @type_solver sc  in
-  match e with
-    | Lit t _ => t
-    | Var name => match get_var sc name with
-                    | Some v => var_type v
-                    | None => ErrorType
-                  end
-                    
-    | Binop Add l r
-    | Binop Sub l r
-    | Binop Mul l r
-    | Binop Div l r =>
-      eq_or_err (slv l) (slv r)
-    | Binop _ l r => Bot
-    | Unop _ o => slv o
-    | Call name cargs =>
-      match get_fun sc name with
-          | None => ErrorType
-          | Some f => if (map slv cargs == args f) then returns f else Bot
-      end
-        
-                            
-  end.
- 
-
-(* Useful lemmas *)
-
-Lemma binop_preserves_type e op l r ctx kind : e = Binop op l r -> @type_solver ctx e = Int kind ->
-                                               @type_solver ctx l = Int kind /\ @type_solver ctx r = Int kind.
-Proof.
-  move => -> //=.
-  by case op; case (@type_solver ctx r);  case (@type_solver ctx l); do [case;case| case | done ].
-Qed.  
+Definition ctype_eq_dec  := dec_from_reflect ctype_eqP.
 
 End Bspc.
