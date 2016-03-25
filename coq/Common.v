@@ -9,7 +9,7 @@ Notation "x $ y" := (@_dollar _ _ x y) (at level 100, right associativity) :core
 Hint Transparent _dollar.
 Hint Unfold _dollar.
 Definition cast {A B : Type} (a: A ) (H: A= B ) : B. rewrite <- H. exact a. Defined.
-Notation "<[ x ]>" := (cast x _) (at level 95, no associativity).
+Notation "/! x" := (cast x _) (at level 100, no associativity).
 
 
 
@@ -17,6 +17,7 @@ Notation "<[ x ]>" := (cast x _) (at level 95, no associativity).
 (* Decidable quality and stuff *)
 Definition eq_dec T := forall x y: T, {x = y} + {~ x = y}.
 Scheme Equality for nat.
+Scheme Equality for unit.
 
 Definition reflect_from_dec {T} (cmp: eq_dec T): (@Equality.axiom T (fun x y => if cmp x y then true else false) ).
   rewrite /Equality.axiom. move=> x y.  

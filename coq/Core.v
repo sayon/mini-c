@@ -6,12 +6,11 @@ Require Import Program.
 Require Import Types.
 Require Import UtilString.
 Import Bspc.
-Import intZmod.
+Import intZmod.  
 Require Import Common.
 
-
 (* Pointer value *)
-Record ptr (t: ctype) := mk_ptr { at_block: nat; offset: nat; }.
+Inductive ptr (t: ctype) := | Goodptr (at_block: nat) (offset: nat) | Nullptr.
 
 Definition ptr_eq_dec t : eq_dec (ptr t).  by rewrite /eq_dec; repeat decide equality. Qed.
 
@@ -38,21 +37,34 @@ Definition coq_type (t: ctype) : Set :=
   end.
 
 Section EqValue.
-  Inductive value (t: ctype) : Set := | Value (v: coq_type(t)) | Garbage | Deallocated | Error.
+  Inductive value (t: ctype) : Set := | Value (_t:ctype)  (_:_t = t) (v: coq_type _t) | Garbage | Deallocated | Error.
   
-  Lemma value_inj C x y: @Value C x = @Value C y <-> x = y.
-    by apply conj; [ move => [] | move => ->]. Qed.
-
-  
-  Lemma value_eq_dec {t} (x y: value t) : { x = y } + { ~ x = y }.
-    destruct x, y, t; try by [right; intro H];try by left.
-      -  case: (int_eq_dec v v0); by [move => ->; left | move=> *; right; case].
-      -  by repeat decide equality.
-      -  by repeat decide equality.
-      -  by repeat decide equality.
-      -  by repeat decide equality.
+  Lemma value_inj T C p x y: @Value T C p x = @Value T C p y -> x = y.
+    case.
+    move => Hd.
+    apply EqdepFacts.eq_sigT_eq_dep in Hd.
+    by apply eq_dep_eq in Hd.
   Qed.
 
+  Lemma value_surj T C p x y: x = y -> @Value T C p x = @Value T C p y.
+    by move =>->.
+  Qed.
+  Lemma value_eq_dec {t} (x y: value t) : { x = y } + { ~ x = y }.
+    destruct x, y, t; try by [right; intro H];try by left; subst.
+    - subst. simpl in *.
+      case: (int_eq_dec v v0). subst; try by [move => ->; left]. 
+      right. by move /value_inj. 
+    - subst; simpl in *. case: (ptr_eq_dec _ v v0).
+      move=> ->. by left.
+      move=> *. right. by  move /value_inj.
+    -  subst. simpl in *.
+       case (v == v0) eqn: Heq; move /eqP in Heq;
+          by [ left; rewrite Heq | right; move /value_inj].
+    -  subst; simpl in *.
+       case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj ].
+    -  subst; simpl in *.
+       case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj].
+  Defined.
 
   Definition value_eqP (t:ctype) := reflect_from_dec (@value_eq_dec t).
   
@@ -89,13 +101,9 @@ Theorem block_eq_dec : eq_dec block.
     move: (EqdepFacts.eq_sigT_eq_dep _ _ _ _ _ _ H0) => H'.
       by apply eq_dep_eq in H'.
 Qed.
-(***!!! SO UGLY *)
-
-Print block_eq_dec.
-
 
 Definition block_eqP := reflect_from_dec (block_eq_dec).
-  
+
 Canonical block_eqMixin := EqMixin block_eqP.
 Canonical block_eqType := EqType block block_eqMixin.
        
@@ -111,6 +119,7 @@ Theorem var_descr_eq_dec: eq_dec var_descr.
   apply ctype_eq_dec.
   apply string_eq_dec.
 Qed.
+
 Definition var_descr_eqP := reflect_from_dec var_descr_eq_dec.
 
 Canonical var_descr_eqMixin := EqMixin var_descr_eqP.
@@ -155,8 +164,22 @@ Definition static_ctx_empty:= mk_stat_ctx [::] [::].
 Record dynamic_ctx : Set := mk_dyn_ctx { memory: seq block }.
 Definition dynamic_ctx_empty := mk_dyn_ctx [::].
 
+Inductive prog_state := | Good: static_ctx -> dynamic_ctx -> prog_state
+ | Bad :static_ctx -> dynamic_ctx -> statement -> prog_state.
 
-Record state : Set := mk_state { static: static_ctx; dynamic: dynamic_ctx }.
+Definition state_init := Good static_ctx_empty dynamic_ctx_empty .
+
+
+Definition get_stat p := match p with
+                           | Good stat dyn => stat
+                           | Bad stat dyn _ => stat
+                         end.
+
+Definition get_dyn p := match p with
+                           | Good stat dyn => dyn
+                           | Bad stat dyn _ => dyn
+                         end.
+
 
 Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
   nth None (map (@Some T) s) (find (option_map p) (map (@Some T) s)).
@@ -222,19 +245,11 @@ Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
   end.
 
 
-
-Inductive prog_state := | Good: static_ctx -> dynamic_ctx -> prog_state
-| Bad : statement -> prog_state.
-
-Definition state_init := Good static_ctx_empty dynamic_ctx_empty .
-
-(* Definition cast {A B : Type} (a: A ) (H: A= B ) : B.   by rewrite <- H. Defined.*)
-
 Program Definition binop_interp (t:ctype) (op: binop) : int -> int -> value t :=
   match t with |
             Int kind =>
             match op with
-              |Add => fun x y=> @Value t $ cast (addz x y ) _
+              |Add => fun x y=> @Value t t _ $ cast (addz x y ) _
               | _ => (fun _ _ => Error _)
             end
             | _ => (fun _ _ => Error _)
@@ -245,7 +260,7 @@ Program Definition unop_interp (t:ctype) (op: unop) : int -> value t :=
   match t with |
             Int kind =>
             match op with
-              |Neg => fun x => @Value t $ cast (oppz x) _
+              |Neg => fun x => @Value t t _ $ cast (oppz x) _
               | _ => fun _ => Error _
             end
             | _ => fun _ => Error _
@@ -258,13 +273,13 @@ Definition find_block (m: dynamic_ctx) (i: nat)  : option block :=
 Definition find_block_state (s:prog_state) (i:nat) : option block :=
   match s with
     | Good _ d => find_block d i
-    | Bad s => None
+    | Bad  _ _ _ => None
   end.
 
 Program Definition dereference (tp:ctype) (v: value (Pointer tp)) (dyn:dynamic_ctx) : value tp :=
   let ret_type := value tp in
   match v as vo return v = vo -> ret_type with
-    | Value (mk_ptr i o) => fun Hto: v = Value _ (mk_ptr _ i o) =>
+    | Value (Pointer tp) _  (Goodptr i o) as vo => fun Hto: v = vo =>
       match find_block dyn i  as fb with
         | Some ( mk_block loc _i sz block_type cnt ) =>
           match block_type == tp with
@@ -276,7 +291,7 @@ Program Definition dereference (tp:ctype) (v: value (Pointer tp)) (dyn:dynamic_c
       end
     | _ => fun _ => Error _
   end _.
-Next Obligation.
+Next Obligation.  
     by apply /eqP.
 Defined.
   
@@ -287,67 +302,63 @@ Program Fixpoint iexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:expr): value (@t
   let ret_type := value $ type e in
   let vars := flatten $ variables stat in
   let blocks := memory dyn in
-  match e  with
-    | Lit t v=> @Value t v                       
-    | Var name => match get_var stat name with
+  match e as e' return e = e' -> value (@type_solver stat e' ) with
+    | Lit t v as e' => fun Heq: e = e' => /! Value t t _ v 
+    | Var name as e' => fun Heq: e = e' =>
+                    match get_var stat name with
                     | Some (declare_var n t i) => match find_block dyn i with
                                                     | Some b => match el_type b == t with
-                                                                  | true => Value (Pointer t) ( mk_ptr t i 0)
+                                                                  | true => /! Value (Pointer t) (Pointer t) _ ( Goodptr t i 0) 
                                                                   | _ => Error _ end
                                                     | None => Error _
                                                   end
                     | None => Error _
                   end
-    | Unop Asterisk op => match type op, interp op with
-                            | Pointer pt, Value p => @dereference pt (cast (Value _ p) _)  dyn 
-                            | _,_ => Error _
-                          end
-    | Unop opcode op => match interp op as io, type op as to return interp op = io -> type op = to -> ret_type with
-                       | Value v, Int kind => fun Hio: interp op = Value _ v =>
-                                                fun Hto: type op = Int kind =>
-                                                  unop_interp (type op) opcode $ cast v _
-                       | _, _ => fun _ _ => Error _
-                     end _ _
-    | Binop opcode l r => match interp l, interp r, type e as te return type e=te -> ret_type with
-                            | Value x, Value y, Int k =>
-                              fun Hte: type e = Int k=>
-                                @eq_value_or_error ret_type (type l) (type r)
-                                                   (fun _ _ => binop_interp (type e) opcode (cast x _) (cast y _) ) (Error _)
-                            | _, _, _ =>fun _ => Error _
-                          end _
-    | Call _ _ => Error _
-  end
+    | Unop opcode op as e' => fun Heq: e = e' =>
+      match opcode as code return opcode = code -> value ( type e')  with
+        | Asterisk as code =>
+          fun Hc: opcode = code =>
+            match interp op with
+              | Value (Pointer pt) Heq p =>  @dereference pt (/! (interp op))   dyn 
+              | _ => Error _
+            end 
+        | code  =>
+          fun Hc : opcode = code =>
+          match interp op with
+                      | Value (Int kind) _ v  => unop_interp (type e') opcode (/! v )
+                      | _ => Error _
+                    end
+      end _
+    | Binop opcode l r as e' =>
+      fun Heq: e = e' =>
+        match interp l, interp r return value ( type e' ) with
+          | Value (Int kx) _ x, Value (Int ky) _ y =>
+            @eq_value_or_error (value ( type e') ) (Int kx) (Int ky)
+                               (fun _ _ => binop_interp (type e') opcode (cast x _) (cast y _) ) (Error _)
+          | _, _ => Error _
+        end 
+    | Call _ _ => fun _ => Error _ 
+  end _
 .
 Next Obligation.
-  rewrite /_dollar in Heq_anonymous.
-    by  rewrite -Heq_anonymous.
-Defined.
-Next Obligation.
-  rewrite /_dollar in Heq_anonymous.
-by  rewrite -Heq_anonymous.
-Defined.
-Next Obligation.
-  rewrite /_dollar in Hto. rewrite Hto. by case kind. Defined.
+  rewrite /_dollar. simpl. by rewrite -Heq.  Defined.
+
+(*destruct (type_solver l); destruct (type_solver r).
+  rewrite /_dollar. simpl. destruct opcode0 =>//=. simpl. 
+  have t:= (@type_solver stat ( Unop opcode0 op)).
+  destruct opcode; try done. move: (H op).
+  rewrite /_dollar in Heq_anonymous. by  rewrite -Heq_anonymous. Defined.
+Next Obligation. rewrite /_dollar in Heq_anonymous. by  rewrite -Heq_anonymous. Defined.
+Next Obligation. rewrite /_dollar in Hto. rewrite Hto. by case kind. Defined.
 Next Obligation. rewrite /_dollar in Hto. rewrite /_dollar.
-                 destruct opcode; try done.
-                 by move: (H op).
+                 destruct opcode; try done. by move: (H op).
 Defined.
-
 Next Obligation. simpl in Hte. rewrite /_dollar in Hte.  simpl in Hte.
-                   by destruct (type_solver l); destruct (type_solver r).
+                 by destruct (type_solver l); destruct (type_solver r).
 Defined.
-
 Next Obligation. simpl in Hte. symmetry in Hte. rewrite /_dollar in Hte. simpl in Hte. destruct (type_solver l); destruct (type_solver r); try by [done | destruct n]. Defined.
+*)
 
-
-(*!!!!!
-Definition eval (s:prog_state) (e:expr ) := match s with
-                                     | Good stat dyn => let ss := stat in @iexpr ss dyn e
-                                     | Bad s => fun _ => Error _
-                                 end. *)
-(*Eval compute in iexpr neg_expr.
-Eval cbv in iexpr add_expr.
-Eval compute in iexpr add_expr.*)
 Definition alloc {dc: dynamic_ctx} (b:block) : dynamic_ctx := mk_dyn_ctx ( (memory dc) ++ [:: b] ).
 
 Definition next_block_id (s:dynamic_ctx) : nat := size $ memory $ s.
@@ -365,7 +376,7 @@ Definition bind_var (v:var_descr) (i:nat) (ctx:static_ctx) :=
 Definition add_static_ctx (s:prog_state) :=
   match s with
     | Good stat dyn => Good (mk_stat_ctx (functions stat) ( [::] :: variables stat) ) dyn
-    | Bad s => Bad s
+    | Bad _ _ _ as s => s
   end.
 
 Definition remove_static_ctx (s:prog_state) :=
@@ -374,7 +385,7 @@ Definition remove_static_ctx (s:prog_state) :=
                   | [::] => s
                   | vs::vvs => Good (mk_stat_ctx (functions stat) vvs) dyn
                 end
-                  | Bad e => Bad e
+                  | s => s
   end.
 
 Definition block_mod (b: block) (idx: nat) (e: value (el_type b)) : option block :=
@@ -387,8 +398,7 @@ Definition block_mod (b: block) (idx: nat) (e: value (el_type b)) : option block
          (set_nth (Error _) (contents b) idx e).
 
 Definition ex_block := mk_block Stack 0 64 Int64 (garbage_values 8).
-Compute block_mod ex_block 1 (Value Int64 3).
-
+Eval compute in block_mod ex_block 1 (Value Int64 Int64 _ 3).
 
 Definition ErrorBlock := mk_block Data 0 0 ErrorType [::].
 
@@ -423,32 +433,39 @@ Definition add_var (vd:var_descr) (c: static_ctx) (i:nat) :=
     end
 .
 
-Program Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
+Program Definition is_value_true {t} {c:static_ctx} (v: value t) : option bool:=
+  match v as v0 return v = v0 -> option bool with
+    | Value (Int kind) _ z as v0 => fun H: v = v0 => Some (@sgz int_numDomainType z != 0)
+    | Value (Pointer _) _ Nullptr as v0 => fun H: v = v0=> Some false
+    | _ => fun _ => None 
+  end _.
+
+
+ Definition eval ps e: value ( @type_solver ( get_stat ps) e ) :=
+ iexpr (get_stat ps) (get_dyn ps) e.
+
+ Program Definition interpreter_step (st:statement) (s:prog_state) :  prog_state :=
   match s with
     |Good stat dyn =>
+     let type := @type_solver stat in
+     let bad := Bad stat dyn st in
      match st with
        | Skip => s
-       | Assign w val  => 
-         match @type_solver stat w with
-           | Pointer t =>
-             match @iexpr stat dyn w, @iexpr stat dyn val with
-               | Value vp, Value v =>                           
-                 match @type_solver stat val == t with
-                   | true =>
-                     match (cast vp _) with
-                         | mk_ptr to off =>
-                           match mem_write t to off dyn (Value t (cast v _) ) with
-                             | Some d => Good stat d
-                             | _ => Bad st
-                           end
-                     end
-                   | _=> Bad st
-                 end
-               | _, _ => Bad st
+       | Assign w val  =>
+         match eval s w, eval s val with
+           | Value (Pointer t) _ vp, Value vtype _ v =>                           
+             match vtype == t with | true =>  match vp with
+                            | Goodptr to off =>
+                              match mem_write t to off dyn (Value t t _  (cast v _) ) with
+                                | Some d => Good stat d
+                                | None => bad
+                              end
+                            | Nullptr => bad
+                          end
+               | _ => bad
              end
-           | _ => Bad st
-         end
-                      
+           | _, _ => bad
+         end                      
      | Alloc loc type o_name sz =>
          let block_id := next_block_id dyn in
          let newdyn := mk_dyn_ctx (memory dyn ++  [:: mk_block loc block_id (sz* SizeOf type) type (garbage_values sz)])  in
@@ -456,26 +473,20 @@ Program Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
            | None => Good stat newdyn
            | Some name => Good (add_var (declare_var name type block_id) stat block_id ) newdyn
          end
-       | If cond _then _else => s
+     | If cond _then _else => if @is_value_true _ stat $ @eval s cond
+                              then s
+                              else
+                                s
        | For prest cond postst body => s
        | While cond body => s
        | CodeBlock sts =>s (* add context, execute, throw away context*)
      end
-       | Bad st => Bad st
-     end.
+       | s => s 
+  end . 
 
-Next Obligation.
-  rewrite /interpreter_step_obligation_1.
-  symmetry in Heq_anonymous.
-  move /eqP in Heq_anonymous.
-  subst t.
-by  rewrite -Heq_anonymous1.
-Defined.
-Next Obligation.
-    by  move: (Logic.eq_sym Heq_anonymous3) =>/eqP => <-.
-Defined.
+ Next Obligation. by rewrite (eqP $ Logic.eq_sym Heq_anonymous). Defined.   
 
-
+ 
 Definition LocVar t name := Alloc Stack t (Some name%string) 1. 
 
 Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
@@ -492,80 +503,5 @@ Definition ex_skip := Skip.
 Definition ex_alloc := LocVar Int64 "x".
 Definition ex_varalloc_stat  := interpreter_step ex_alloc state_init.
 Compute ex_varalloc_stat.
-Compute match ex_varalloc_stat with
-          |Good stat dyn => iexpr stat dyn ex_var_x_expr
-          |Bad _ => Error
-          end.
 
-decide equality.
-              
-(*remake it so that every variable is a pointer! *)
-
-
-
-
-
-(*Program  Fixpoint value_beq (x y: value T) : bool :=
-    match x, y with
-      | Value vx, Value vy =>
-        match T with
-          | Int _ =>  (@cast _ int vx _)  == (@cast _ int vy _) 
-                                                      
-          | Pointer t => (@cast _ (ptr t) vx _) == (@cast _ (ptr t) vy _)
-                                 
-          | Struct ls =>  (@cast _ (seq nat) vx _)  == (@cast _ (seq nat) vy _)
-                                                         
-          | _ => true
-        end
-      | _, _ => false
-    end.
-  (*Next Obligation.
-    done.
-  Defined.
-  Next Obligation.
-    done.
-  Defined.*)
-  (*
-  Program Fixpoint value_beq (x y: value T) : bool :=
-    match x,y with
-      | Value vx, Value vy =>
-        match T return coq_type T -> coq_type T  -> bool with
-          | Int _ => eqn
-          | Pointer t => ptr_beq
-          | Bot => fun _ _ => true
-          | Struct _ => fun _ _ => true
-          | ErrorType => fun _ _ => true
-    end
-        (@cast _ (coq_type T) vx _)   (@cast _ (coq_type T)  vy _)
-      | _, _ => true
-    end.
-  Program Fixpoint value_beq (x y: value T) : bool :=
-    match type_of_ x with
-      | Int _ => match x,y with
-                   | Value vx, Value vy => (@cast _ (coq_type T) vx _)  == (@cast _ int vy _)
-                   | _, _ => false
-                 end
-      | Pointer t => match x, y with
-                       | Value vx, Value vy => ptr_beq t (@cast _ (ptr t) vx _) (@cast _ (ptr t) vy _)
-                       | _ , _ => false
-                     end
-      | Struct ls => match x,y with
-                       |Value vx, Value vy => (@cast _ (seq nat) vx _)  == (@cast _ (seq nat) vy _)
-                       | _, _ => false
-                     end
-      | _ => true
-    end.
-  
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Next Obligation. compute in Heq_anonymous.  by rewrite -Heq_anonymous. Defined.
-  Solve All Obligations with done.
-   *)
-Next Obligation. 
-  done.
-Defined.
-Next Obligation. done. Defined.
- *)
+Eval compute in t ex_varalloc_stat ex_var_x_expr.
