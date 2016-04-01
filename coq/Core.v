@@ -45,10 +45,9 @@ Section EqValue.
     apply EqdepFacts.eq_sigT_eq_dep in Hd.
     by apply eq_dep_eq in Hd.
   Qed.
+  
+  Lemma value_surj T C p x y: x = y -> @Value T C p x = @Value T C p y. by move =>->. Qed.
 
-  Lemma value_surj T C p x y: x = y -> @Value T C p x = @Value T C p y.
-    by move =>->.
-  Qed.
   Lemma value_eq_dec {t} (x y: value t) : { x = y } + { ~ x = y }.
     destruct x, y, t; try by [right; intro H];try by left; subst.
     - subst. simpl in *.
@@ -58,7 +57,7 @@ Section EqValue.
       move=> ->. by left.
       move=> *. right. by  move /value_inj.
     -  subst. simpl in *.
-       case (v == v0) eqn: Heq; move /eqP in Heq;
+       case Heq: ( v == v0); move /eqP in Heq;
           by [ left; rewrite Heq | right; move /value_inj].
     -  subst; simpl in *.
        case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj ].
@@ -129,7 +128,31 @@ Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
 Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr .
 Scheme Equality for binop.
 
+Definition binop_eqP := reflect_from_dec binop_eq_dec.
+
+Canonical binop_eqMixin := EqMixin binop_eqP.
+Canonical binop_eqType := EqType binop binop_eqMixin.
+
 Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asterisk .
+Definition unop_beq (x y : unop) : bool :=
+  match x, y with
+    | Neg, Neg  |Invert, Invert | Not, Not | Amp, Amp | Asterisk, Asterisk => true
+    | Convert t1, Convert t2 => t1 == t2
+    | _, _ => false
+  end.
+
+Lemma unop_eqP: Equality.axiom unop_beq.
+  move=> x y.
+  case Heq: (unop_beq _ _); move: Heq. 
+  case x; case y =>//=; try by constructor.
+  move=> t0 t1. by move /eqP =>->; constructor.
+  case x; case y => //=; try by constructor.
+  move=> t0 t1  /eqP => Hneq. constructor. by case.
+Qed.
+Canonical unop_eqMixin := EqMixin unop_eqP.
+Canonical unop_eqType := EqType unop unop_eqMixin.
+Definition unop_eq_dec := dec_from_reflect unop_eqP.
+
 
 Inductive expr :=
 | Lit   (t:ctype) (_:coq_type(t))
@@ -444,7 +467,143 @@ Program Definition is_value_true {t} {c:static_ctx} (v: value t) : option bool:=
  Definition eval ps e: value ( @type_solver ( get_stat ps) e ) :=
  iexpr (get_stat ps) (get_dyn ps) e.
 
- Program Definition interpreter_step (st:statement) (s:prog_state) :  prog_state :=
+ Print expr.
+ (***! Do canonical instances need to be exported? *)
+ Print eq_value_or_error.
+ Print coq_type.
+
+ Print ctype_beq.
+
+Definition for_eq_carriers {R} (x y: ctype) (def:R)
+            (fint: int->int->R)
+            (fptr: forall T, ptr T -> ptr T -> R)
+            (fstruct: seq nat -> seq nat -> R)
+            (fbot: unit->R)
+            (ferror: unit->R)
+            (xv:coq_type x)
+            (yv: coq_type y)
+ : R. refine (
+   match x as x' , y as y' return x = x' -> y = y' -> R with
+     | Int S8 as x', Int S8 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U8  as x', Int U8  as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _) 
+     | Int S16 as x', Int S16 as y' =>
+              fun Hx: x = x' => fun Hy: y = y' =>
+                                  fint (cast xv _) (cast yv _)
+     | Int U16 as x', Int U16 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int S32 as x', Int S32 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U32 as x', Int U32 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int S64 as x', Int S64 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U64 as x', Int U64 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Pointer tx as x', Pointer ty as y'=>
+       fun Hx: x = x' => fun Hy: y=y' =>
+                           match tx == ty as r return r = (tx == ty) -> R with
+                             | true => fun Heq : true = (tx == ty) => fptr tx (cast xv _) (cast yv _)
+                             | false => fun Heq : false = (tx == ty) => def
+                           end _
+     | Bot, Bot => fun _ _ => fbot ()
+     | ErrorType, ErrorType => fun _ _ => ferror ()
+     | _, _=> fun _ _ => def
+   end Logic.eq_refl Logic.eq_refl); try by subst.
+      subst.
+      by rewrite (eqP (Logic.eq_sym Heq)).
+Defined.
+
+ Fixpoint expr_beq (l r:expr) : bool :=
+   let fix process (xs ys: seq expr) := match xs,ys with
+                                        | nil, nil => true
+                                        | x::xs, y::ys => expr_beq x y && process xs ys
+                                        | _, nil
+                                        | nil, _ => false
+                                      end in
+   match l,r with
+     | Lit x vx, Lit y vy =>
+       for_eq_carriers x y false
+                       (fun a b=> a == b)
+                       (fun pt px py => px == py)
+                       (fun sx sy => sx == sy)
+                       (fun _=> true)
+                       (fun _=> true) vx vy
+     | Var x, Var y => x == y
+     | Binop x x0 x1 , Binop y y0 y1 => (x == y) && expr_beq x0  y0 && expr_beq x1 y1
+     | Unop x x0, Unop y y0 => (x == y) && expr_beq x0 y0
+     | Call x x0 , Call y y0 => (x == y) && process x0 y0
+     | _,_ => false
+   end.
+
+ Theorem carrier_eq_dec: forall t, eq_dec (coq_type t).
+   rewrite /eq_dec.
+   case.
+   - case; apply int_eq_dec.
+   - apply ptr_eq_dec.
+   - decide equality. decide equality.
+   - decide equality.
+   - decide equality.
+ Qed.
+
+
+   
+ Theorem expr_eq_dec : eq_dec expr.
+   Local Lemma Hlst {A} (a:A) l : a :: l = l -> False. by  elim l =>//=; move=> a0 l0 IH [] =><-. Qed.
+   rewrite /eq_dec.
+   fix 1.
+   move => x y.
+   case x; case y; try by right.
+   - move => t c t0 c0.
+     case Ht:(t == t0).
+     + move /eqP in Ht; subst.
+       move: (carrier_eq_dec t0 c0 c).
+       case; [by left; subst
+             | by right; move =>[]=> H; depcomp H].
+     + by move /eqP in Ht; right; case; move=> He; symmetry in He.
+   - by move=> s0 s; move: (string_eq_dec s s0) => []; by[left; subst| right; case]. 
+   - move=> op2 x2 y2 op1 x1 y1.
+     move: (binop_eq_dec op1 op2) => [Hop|Hop]; 
+     move: (expr_eq_dec x1 x2) => [Hx|Hx];
+       move: (expr_eq_dec y1 y2) => [Hy|Hy]; try by right;case.
+     by rewrite Hx Hy Hop; left. 
+   - move=> op1 x1  op2 x2.
+     move:(expr_eq_dec x2 x1) => [Hx|Hx]; move:(unop_eq_dec op2 op1) => [Hop|Hop]; subst; try by [right;case].
+     by left.
+   - move=> sy ly sx lx. 
+     move: (string_eq_dec sx sy) => [Hs|Hs]; last by [right;case];subst.
+     elim: lx ly.
+     + elim; by [left| right ; discriminate].
+       move => a l IH [].
+       * by right; discriminate. 
+       * clear x y. move=> y ys.
+         move: (expr_eq_dec a y) => [Ha|Ha]; move: (IH ys) => [Hy|Hy].
+         ** inversion Hy; subst; by left.
+         ** by right; case=> * *; subst. 
+         ** by right; case. 
+         ** by right; case.
+Qed.
+
+Definition expr_eqP := reflect_from_dec expr_eq_dec.
+  
+Canonical expr_eqMixin := EqMixin expr_eqP.
+Canonical expr_eqType := EqType expr expr_eqMixin.
+        
+ Theorem statement_eq_dec: eq_dec statement.
+   rewrite /eq_dec.   
+
+   decide equality.
+   decide equality.
+   
+Program Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
   match s with
     |Good stat dyn =>
      let type := @type_solver stat in
@@ -474,7 +633,7 @@ Program Definition is_value_true {t} {c:static_ctx} (v: value t) : option bool:=
            | Some name => Good (add_var (declare_var name type block_id) stat block_id ) newdyn
          end
      | If cond _then _else => if @is_value_true _ stat $ @eval s cond
-                              then s
+                              then interpreter_step 
                               else
                                 s
        | For prest cond postst body => s
@@ -504,4 +663,6 @@ Definition ex_alloc := LocVar Int64 "x".
 Definition ex_varalloc_stat  := interpreter_step ex_alloc state_init.
 Compute ex_varalloc_stat.
 
-Eval compute in t ex_varalloc_stat ex_var_x_expr.
+
+Eval compute in eval ex_varalloc_stat ex_var_x_expr.
+

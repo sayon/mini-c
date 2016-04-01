@@ -62,14 +62,13 @@ Proof.
 - elim; try by [ clear ctype_better_ind; try move=> c; apply Hptr].
 Qed.
 
-
 Fixpoint ctype_beq (x y: ctype) {struct x} : bool  :=
 let fix process (xs ys: seq ctype) := match xs,ys with
                                         | nil, nil => true
                                         | x::xs, y::ys => ctype_beq x y && process xs ys
                                         | _, nil
                                         | nil, _ => false
-                                      end in                                      
+                                      end in
 match x, y with
   | Int x, Int y => numeric_beq x y
   | Bot, Bot
@@ -143,5 +142,6 @@ Canonical numeric_eqType := EqType numeric numeric_eqMixin.
 (*Definition int_union (x y: numeric) : numeric := match x,y with *)
 
 Definition ctype_eq_dec  := dec_from_reflect ctype_eqP.
+
 
 End Bspc.
