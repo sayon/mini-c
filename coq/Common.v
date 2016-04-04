@@ -45,3 +45,18 @@ Fixpoint  zipwith_when_eqlength {A B} (f: A->B->bool) (x: seq A) (y: seq B) : bo
     | nil, nil => true
     | nil, _ | _, nil => false
   end.     
+
+Theorem seq_eq_dec T: eq_dec T -> eq_dec ( seq T ).
+  rewrite /eq_dec.
+  move=> H s1 s2.
+  elim: s1 s2.
+  elim; by [left| right ; discriminate].
+  move => a l IH [].
+       * by right; discriminate. 
+       * move=> y ys.
+         move: (H a y) => [Ha|Ha]; move: (IH ys) => [Hy|Hy].
+         ** inversion Hy; subst; by left.
+         ** by right; case=> * *; subst. 
+         ** by right; case. 
+         ** by right; case.
+Qed.

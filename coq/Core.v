@@ -169,7 +169,9 @@ Inductive statement :=
 | If: expr -> statement -> statement -> statement
 | For: statement -> expr -> statement -> statement -> statement
 | While: expr -> statement -> statement
-| CodeBlock: seq statement -> statement.
+| CodeBlock: seq statement -> statement
+| Enter
+| Leave .
 
 Record function := mk_fun{
                        fun_id: nat;
@@ -596,27 +598,49 @@ Definition expr_eqP := reflect_from_dec expr_eq_dec.
   
 Canonical expr_eqMixin := EqMixin expr_eqP.
 Canonical expr_eqType := EqType expr expr_eqMixin.
-        
- Theorem statement_eq_dec: eq_dec statement.
-   rewrite /eq_dec.   
 
+Theorem statement_eq_dec: eq_dec statement.
+   rewrite /eq_dec.   
+fix 1.
+   decide equality; try apply expr_eq_dec.
    decide equality.
    decide equality.
-   
-Program Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   decide equality.
+   apply (seq_eq_dec _ ctype_eq_dec).
+   decide equality.
+   decide equality.
+Defined.
+
+Definition statement_eqP := reflect_from_dec statement_eq_dec.
+
+Canonical statement_eqMixin := EqMixin statement_eqP.
+Canonical statement_eqType := EqType statement statement_eqMixin.
+
+Program Fixpoint interpreter_step (st:statement) (s:prog_state) (cont: seq statement ):  prog_state * seq statement:=
   match s with
     |Good stat dyn =>
      let type := @type_solver stat in
-     let bad := Bad stat dyn st in
+     let bad := pair (Bad stat dyn st) nil in
      match st with
-       | Skip => s
+       | Skip => (s, cont)
        | Assign w val  =>
          match eval s w, eval s val with
            | Value (Pointer t) _ vp, Value vtype _ v =>                           
              match vtype == t with | true =>  match vp with
                             | Goodptr to off =>
                               match mem_write t to off dyn (Value t t _  (cast v _) ) with
-                                | Some d => Good stat d
+                                | Some d => (Good stat d, cont)
                                 | None => bad
                               end
                             | Nullptr => bad
@@ -629,24 +653,65 @@ Program Fixpoint interpreter_step (st:statement) (s:prog_state) :  prog_state :=
          let block_id := next_block_id dyn in
          let newdyn := mk_dyn_ctx (memory dyn ++  [:: mk_block loc block_id (sz* SizeOf type) type (garbage_values sz)])  in
          match o_name with
-           | None => Good stat newdyn
-           | Some name => Good (add_var (declare_var name type block_id) stat block_id ) newdyn
+           | None => (Good stat newdyn, cont)
+           | Some name => (Good (add_var (declare_var name type block_id) stat block_id ) newdyn, cont)
          end
-     | If cond _then _else => if @is_value_true _ stat $ @eval s cond
-                              then interpreter_step 
-                              else
-                                s
-       | For prest cond postst body => s
-       | While cond body => s
-       | CodeBlock sts =>s (* add context, execute, throw away context*)
+     | If cond _then _else => interpreter_step (
+                                  if @is_value_true _ stat $ @eval s cond
+                                  then  _then else _else ) s cont
+     | For prest cond postst body => (s, cont)
+     | While cond body => (s, cont)
+     | CodeBlock ss => (s, (Enter::ss) ++ (Leave :: cont))
+     | Enter => (add_static_ctx s, cont)
+     | Leave => (remove_static_ctx s, cont)
      end
-       | s => s 
+       | s => (s, nil)
   end . 
 
  Next Obligation. by rewrite (eqP $ Logic.eq_sym Heq_anonymous). Defined.   
 
  
 Definition LocVar t name := Alloc Stack t (Some name%string) 1. 
+
+Notation "{  x1 ; .. ; xn }" := (CodeBlock(  cons x1  .. (cons xn nil) ..) ) (at level 35, left associativity) : c. 
+Notation "'int8 x " := (LocVar Int8 x) (at level 200, no associativity) :c.
+Notation "'uint8 x " := (LocVar UInt8 x) (at level 200, no associativity) :c.
+Notation "'int16 x " := (LocVar Int16 x) (at level 200, no associativity) :c.
+Notation "'uint16 x " := (LocVar UInt16 x) (at level 200, no associativity) :c.
+Check Assign (Var "x") (Lit Int64 4).
+
+Notation "' v := value" := (Assign (Var v) (value) ) (at level 200, no associativity) :c.
+Delimit Scope c with c.
+Definition sample_prog := {
+    'int8 "x";
+    'int8 "y";
+    ' "x" := Lit Int8 4
+  } %c .
+
+Compute interpreter_step sample_prog state_init nil .
+
+Fixpoint interpret (steps: nat) (state: prog_state) (cont: seq statement): prog_state * seq statement :=
+  match steps, cont with
+    | S steps_left, s::ss =>
+      match interpreter_step s  state ss with
+        | (Good stat dyn as newstate, newcont) => interpret steps_left newstate newcont
+        | (Bad _ _ _ as bs, _) => (bs, cont)
+      end
+    | _, _ => (state, cont)
+  end
+        
+
+.
+
+(* !!! no luck here *)
+Eval compute in interpret 5 state_init (sample_prog::nil).
+
+
+
+
+Print testr.
+Eval compute in eval (fst testr) (Var "x").
+
 
 Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
 Definition ex_var_x := LocVar Int8 "x" .
