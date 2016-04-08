@@ -1,9 +1,6 @@
 From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
-
+From mathcomp.algebra Require Import ssrint.
 Require Import Common.
-(* Utility from Coq lists we need for induction *)
-
-Module Bspc.
 
 Fixpoint In {A:Type} (a:A) (l: seq A) : Prop :=
 match l with
@@ -18,7 +15,7 @@ Inductive ctype :=
 | Int (_:numeric) 
 | Pointer : ctype -> ctype
 | Struct: seq ctype -> ctype
-| Bot | ErrorType.
+| Bot | Unit | ErrorType.
 
 Definition Int8 := Int S8.
 Definition UInt8 := Int U8.
@@ -45,11 +42,11 @@ Fixpoint SizeOf (t:ctype) :=
 Theorem ctype_better_ind (P: ctype -> Prop):
 (forall nt, (P (Int nt)))->
 (forall p: ctype, P p -> P (Pointer p) ) ->
-(forall l, (forall e, In e l -> P e) -> P (Struct l)) ->
+(forall l, (forall e, In e l -> P e) -> P (Struct l)) -> P Unit ->
 (P Bot) -> (P ErrorType) ->
 (forall t:ctype, P t).
 Proof.
-  move=> Hnt Hptr Hstr Hbot Herr. 
+  move=> Hnt Hptr Hstr Hunit Hbot Herr. 
   fix 1.
   have StructProof: forall l : seq ctype, P (Struct l). {
     move=> l. apply Hstr. elim: l.
@@ -59,7 +56,7 @@ Proof.
       + apply Hin.
   }    
   move=>[]; try by [clear ctype_better_ind].
-- elim; try by [ clear ctype_better_ind; try move=> c; apply Hptr].
+  - elim; try by [ clear ctype_better_ind; try move=> c; apply Hptr].
 Qed.
 
 Fixpoint ctype_beq (x y: ctype) {struct x} : bool  :=
@@ -75,6 +72,7 @@ match x, y with
   | ErrorType, ErrorType => true
   | Pointer px, Pointer py => ctype_beq px py
   | Struct xs, Struct ys => process xs ys
+  | Unit, Unit => true
   | _, _ => false
 end.
 
@@ -127,7 +125,7 @@ elim x; try do [ by case; constructor ].
       rewrite Bool.andb_false_r in Hsab. by inversion Hsab.
       **  move=> Heq.
       inversion Heq.
-      rewrite H2 in Hstructs. by exfalso.  
+      rewrite H2 in Hstructs. by exfalso.
 Qed.      
 
 Canonical ctype_eqMixin := EqMixin ctype_eqP.
@@ -143,5 +141,149 @@ Canonical numeric_eqType := EqType numeric numeric_eqMixin.
 
 Definition ctype_eq_dec  := dec_from_reflect ctype_eqP.
 
+(* Pointer value *)
+Inductive ptr (t: ctype) := | Goodptr (at_block: nat) (offset: nat) | Nullptr.
 
-End Bspc.
+Definition ptr_eq_dec t : eq_dec (ptr t).  by rewrite /eq_dec; repeat decide equality. Qed.
+
+Definition ptr_eqP t := reflect_from_dec (ptr_eq_dec t).
+Canonical ptr_eqMixin t := EqMixin (ptr_eqP t).
+Canonical ptr_eqType t := EqType (ptr t) (ptr_eqMixin t).
+
+(* Holders for different value types *)
+Definition coq_type (t: ctype) : Set :=
+  match t with
+    | Int _ => int
+    | Pointer t => ptr t
+    | Struct ls => seq nat
+    | Bot => unit
+    | Unit => unit
+    | Error => unit
+  end.
+
+
+Section EqValue.
+  Inductive value (t: ctype) : Set := | Value (_t:ctype)  (_:_t = t) (v: coq_type _t) | Garbage | Deallocated | Error.
+  
+  Lemma value_inj T C p x y: @Value T C p x = @Value T C p y -> x = y.
+    case.
+    move => Hd.
+    by depcomp Hd.
+  Qed.
+  
+  Lemma value_surj T C p x y: x = y -> @Value T C p x = @Value T C p y. by move =>->. Qed.
+
+  Lemma value_eq_dec {t} (x y: value t) : { x = y } + { ~ x = y }.
+    destruct x, y, t; try by [right; intro H];try by left; subst.
+    - subst. simpl in *.
+      case: (int_eq_dec v v0). subst; try by [move => ->; left]. 
+      right. by move /value_inj. 
+    - subst; simpl in *. case: (ptr_eq_dec _ v v0).
+      move=> ->. by left.
+      move=> *. right. by  move /value_inj.
+    -  subst. simpl in *.
+       case Heq: ( v == v0); move /eqP in Heq;
+          by [ left; rewrite Heq | right; move /value_inj].
+    -  subst; simpl in *.
+       case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj ].
+    -  subst; simpl in *.
+       case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj].
+    -  subst; simpl in *.
+       case: (unit_eq_dec v v0);by [move=> ->;left|move=> *; right; move /value_inj].
+  Defined.
+
+  Definition value_eqP (t:ctype) := reflect_from_dec (@value_eq_dec t).
+  
+  Canonical value_eqMixin (t:ctype) := EqMixin (value_eqP t).
+  Canonical value_eqType t := Eval hnf in  EqType (value t) (value_eqMixin t).
+End  EqValue.
+
+Definition eq_value_or_error_arith {A:Type} (tl tr: ctype) (v: ctype -> ctype -> A) (err: A):A :=
+ match tl, tr  with
+    |Int S8, Int S8 
+    |Int U8, Int U8 
+    |Int S16, Int S16 
+    |Int U16, Int U16 
+    |Int S32, Int S32 
+    |Int U32, Int U32 
+    |Int S64, Int S64 
+    |Int U64, Int U64 => v tl tr
+    | _, _=> err 
+  end
+.
+
+Definition eq_value_or_error_proved {A:Type} (tl tr: ctype) (v: tl = tr-> ctype -> ctype -> A) (err: A):A.
+  refine(
+    match tl == tr as t return tl==tr=t -> A with
+    | true => fun Ht =>  v _ tl tr
+    | false => fun Ht => err
+    end _).
+  exact: eqP Ht.
+  reflexivity.
+Defined.
+
+Definition eq_value_or_error_proved_arith {A:Type} (tl tr: ctype) (v: tl = tr-> ctype -> ctype -> A) (err: A):A.
+refine( match tl as tl_, tr as tr_ return tl = tl_-> tr = tr_ -> A with
+    |Int S8, Int S8
+    |Int U8, Int U8
+    |Int S16, Int S16 
+    |Int U16, Int U16 
+    |Int S32, Int S32 
+    |Int U32, Int U32 
+    |Int S64, Int S64 
+    |Int U64, Int U64 => fun Hl Hr =>  v _ tl tr
+    | _, _=> fun _ _ => err 
+  end _ _)
+; try by [rewrite Hl;rewrite Hr].
+reflexivity.
+reflexivity.
+Defined.
+
+
+Definition for_eq_carriers {R} (x y: ctype) (def:R)
+            (fint: int->int->R)
+            (fptr: forall T, ptr T -> ptr T -> R)
+            (fstruct: seq nat -> seq nat -> R)
+            (fbot: unit->R)
+            (ferror: unit->R)
+            (xv:coq_type x)
+            (yv: coq_type y)
+ : R. refine (
+   match x as x' , y as y' return x = x' -> y = y' -> R with
+     | Int S8 as x', Int S8 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U8  as x', Int U8  as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _) 
+     | Int S16 as x', Int S16 as y' =>
+              fun Hx: x = x' => fun Hy: y = y' =>
+                                  fint (cast xv _) (cast yv _)
+     | Int U16 as x', Int U16 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int S32 as x', Int S32 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U32 as x', Int U32 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int S64 as x', Int S64 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Int U64 as x', Int U64 as y' =>
+       fun Hx: x = x' => fun Hy: y = y' =>
+                           fint (cast xv _) (cast yv _)
+     | Pointer tx as x', Pointer ty as y'=>
+       fun Hx: x = x' => fun Hy: y=y' =>
+                           match tx == ty as r return r = (tx == ty) -> R with
+                             | true => fun Heq : true = (tx == ty) => fptr tx (cast xv _) (cast yv _)
+                             | false => fun Heq : false = (tx == ty) => def
+                           end _
+     | Bot, Bot => fun _ _ => fbot tt
+     | ErrorType, ErrorType => fun _ _ => ferror tt
+     | _, _=> fun _ _ => def
+   end Logic.eq_refl Logic.eq_refl); try by subst.
+      subst.
+      by rewrite (eqP (Logic.eq_sym Heq)).
+Defined.

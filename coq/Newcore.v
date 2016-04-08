@@ -1,149 +1,134 @@
-From mathcomp.ssreflect Require Import ssreflect ssrnat seq eqtype ssrbool.
-From mathcomp.algebra Require Import ssrint ssralg.
-From Coq.Strings Require Import Ascii String.
-Require Import Coq.Program.Program.
-Require Import Program.
-Require Import UtilString.
-Import intZmod.  
+From mathcomp Require Import ssreflect.all_ssreflect eqtype.
+From mathcomp Require Import algebra.ssrint.
+
+Import intZmod.
+ 
 Require Import Common Types Memory.
+Require Import Coq.Strings.String UtilString SSet.
 
+Inductive BinOpKind :=| Add | Sub | Mul | Div | LAnd | LOr. Scheme Equality for BinOpKind.
 
-       
-Record var_descr := declare_var { var_name: string; var_type: ctype; location: nat }.
+          Definition binop_eqP := reflect_from_dec BinOpKind_eq_dec.
+    
+          Canonical BinOpKind_eqMixin := EqMixin binop_eqP.
+          Canonical BinOpKind_eqType := EqType BinOpKind BinOpKind_eqMixin.
 
-Definition var_descr_beq (x y: var_descr) : bool :=
-(var_name x == var_name y)  && (var_type x == var_type y) && (location x == location y).
+Inductive UnOpKind := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asterisk .
 
-Theorem var_descr_eq_dec: eq_dec var_descr.
-  rewrite /eq_dec.
-  decide equality.
-  decide equality.
-  apply ctype_eq_dec.
-  apply string_eq_dec.
-Qed.
+          Definition UnOpKind_beq (x y : UnOpKind) : bool :=
+            match x, y with
+              | Neg, Neg  |Invert, Invert | Not, Not | Amp, Amp | Asterisk, Asterisk => true
+              | Convert t1, Convert t2 => t1 == t2
+              | _, _ => false
+            end.
 
-Definition var_descr_eqP := reflect_from_dec var_descr_eq_dec.
-
-Canonical var_descr_eqMixin := EqMixin var_descr_eqP.
-Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
-
-  
-Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr .
-Scheme Equality for binop.
-
-Definition binop_eqP := reflect_from_dec binop_eq_dec.
-
-Canonical binop_eqMixin := EqMixin binop_eqP.
-Canonical binop_eqType := EqType binop binop_eqMixin.
-
-Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asterisk .
-Definition unop_beq (x y : unop) : bool :=
-  match x, y with
-    | Neg, Neg  |Invert, Invert | Not, Not | Amp, Amp | Asterisk, Asterisk => true
-    | Convert t1, Convert t2 => t1 == t2
-    | _, _ => false
-  end.
-
-Lemma unop_eqP: Equality.axiom unop_beq.
-  move=> x y.
-  case Heq: (unop_beq _ _); move: Heq. 
-  case x; case y =>//=; try by constructor.
-  move=> t0 t1. by move /eqP =>->; constructor.
-  case x; case y => //=; try by constructor.
-  move=> t0 t1  /eqP => Hneq. constructor. by case.
-Qed.
-Canonical unop_eqMixin := EqMixin unop_eqP.
-Canonical unop_eqType := EqType unop unop_eqMixin.
-Definition unop_eq_dec := dec_from_reflect unop_eqP.
-
-
+          Lemma UnOpKind_eqP: Equality.axiom UnOpKind_beq.
+            - move=> x y.
+              case Heq: (UnOpKind_beq _ _); move: Heq. 
+              case x; case y =>//=; try by constructor.
+              move=> t0 t1. by move /eqP =>->; constructor.
+              case x; case y => //=; try by constructor.
+              move=> t0 t1  /eqP => Hneq. constructor. by case.
+          Qed.
+          Canonical UnOpKind_eqMixin := EqMixin UnOpKind_eqP.
+          Canonical UnOpKind_eqType := EqType UnOpKind UnOpKind_eqMixin.
+          Definition UnOpKind_eq_dec := dec_from_reflect UnOpKind_eqP.
+          
 Inductive expr :=
-| Lit   (t:ctype) (_:coq_type(t))
-| Var   (_:string)
-| Binop (_:binop) (_ _: expr)
-| Unop  (_:unop)  (_: expr)
-| Call (_: string) (_: seq expr).
-
+| Assign: expr -> expr -> expr
+| Binop: BinOpKind -> expr -> expr -> expr
+| UnOp: UnOpKind -> expr -> expr
+| Var: string -> expr
+| Lit: forall t:ctype, coq_type t -> expr
+| Call: string -> seq expr -> expr.
 
 Inductive statement :=
-| Skip
-| Assign: expr -> expr -> statement
-| Alloc: storage -> ctype -> option string -> nat -> statement
+| Sexpr : expr -> statement
 | If: expr -> statement -> statement -> statement
-| For: statement -> expr -> statement -> statement -> statement
-| While: expr -> statement -> statement
-| CodeBlock: seq statement -> statement
-| Enter
-| Leave .
+| While : expr -> statement -> statement
+| Return: expr -> statement
+| Alloc: storage -> ctype -> option string -> nat -> statement
+| Sequence: seq statement -> statement
+.
+Record var_descr := declare_var { var_name: string; var_type: ctype; location: nat }.
+           Theorem var_descr_eq_dec: eq_dec var_descr.
+             rewrite /eq_dec. decide equality. decide equality. apply ctype_eq_dec. apply string_eq_dec.
+           Qed.
+           
+           Definition var_descr_eqP := reflect_from_dec var_descr_eq_dec.
+           Canonical var_descr_eqMixin := EqMixin var_descr_eqP.
+           Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
 
-Record function := mk_fun{
+
+Record function := mk_fun {
                        fun_id: nat;
                        fun_name: string;
-                       args: seq ctype;
-                       returns: ctype;
-                       body: seq statement;
-
+                       fun_args: seq ctype;
+                       fun_returns: ctype;
+                       fun_body: statement;
                      }.
+
 Record static_ctx : Set := mk_stat_ctx {
                         functions: seq function;
-                        variables: seq ( seq ( prod var_descr  nat) );
-                       }.
+                        variables: seq ( seq var_descr );
+                             }.
+
 Definition static_ctx_empty:= mk_stat_ctx [::] [::].
 
-Record dynamic_ctx : Set := mk_dyn_ctx { memory: seq block }.
-Definition dynamic_ctx_empty := mk_dyn_ctx [::].
+Inductive deref := | Deref : forall t:ctype,  ptr t -> deref.
 
-Inductive prog_state := | Good: static_ctx -> dynamic_ctx -> prog_state
- | Bad :static_ctx -> dynamic_ctx -> statement -> prog_state.
+Record dynamic_ctx : Set := mk_dyn_ctx { memory: seq block; reads: seq deref; writes: seq deref }.
+(* 0th block for Unit? NO we dont need that
+1-N blocks for functions*)
 
-Definition state_init := Good (mk_stat_ctx nil [:: [:: (declare_var "Unit" Unit 0,0) ] ])
-                              dynamic_ctx_empty .
+Definition dynamic_ctx_empty := mk_dyn_ctx [::] [::] [::].
 
+Inductive prog_state :=
+| Good: static_ctx -> dynamic_ctx -> prog_state
+| Bad :static_ctx -> dynamic_ctx -> statement -> prog_state.
 
-Definition get_stat p := match p with
-                           | Good stat dyn => stat
-                           | Bad stat dyn _ => stat
-                         end.
+Definition state_init := Good (mk_stat_ctx nil [:: [:: declare_var "Unit" Unit 0 ] ]) 
+                              dynamic_ctx_empty.
 
-Definition get_dyn p := match p with
-                           | Good stat dyn => dyn
-                           | Bad stat dyn _ => dyn
-                         end.
-
-
-
+Definition get_stat p := match p with | Good stat _ | Bad stat _ _ => stat end.
+Definition get_dyn  p := match p with | Good _ dyn  | Bad _  dyn _ => dyn  end.
 
 Definition get_var (sc:static_ctx) (name:string) : option var_descr :=
-  option_find (fun p: var_descr => var_name p == name) (map fst (flatten (variables sc))).
-
+  option_find (fun p: var_descr => var_name p == name) (flatten (variables sc)).
 
 Definition get_fun (sc:static_ctx) (name:string) : option function :=
   option_find (fun p: function => fun_name p == name) (functions sc).
 
+Definition find_block (m: dynamic_ctx) (i: nat)  : option block :=
+  option_find (fun b=> block_id b == i) $ memory m.
 
-Fixpoint type_solver {sc: static_ctx}  (e: expr) : ctype:=
-  let slv := @type_solver sc  in
+
+Definition fmap_or {T R} (f: T-> R)  (orelse: R)  (x:option T) := match x with | Some x => f x | None => orelse end.
+(* Add address shit*)
+  
+Fixpoint type_solver {sc: static_ctx} (e: expr) : ctype:=
+  let type := @type_solver sc  in
   match e with
-    | Lit t _ => t
-    | Var name => match get_var sc name with
-                    | Some v => Pointer $ var_type v
-                    | None => ErrorType
-                  end
-    | Binop _ l r => eq_or_err (slv l) (slv r)
-    | Unop Asterisk op => match slv op with
+    | Assign lhs rhs => Unit 
+    | Binop code l r => eq_value_or_error_proved_arith (type l) (type r) (fun H x y => x) Bot
+    | UnOp Asterisk op => match type op with
                             | Pointer t => t
                             | _ => Bot
                           end
-    | Unop _ o => slv o
-    | Call name cargs =>
-      match get_fun sc name with
-          | None => ErrorType
-          | Some f => if (map slv cargs == args f) then returns f else Bot
-      end
+    | UnOp _ o => type o
+    | Var name => fmap_or (Pointer \o var_type) ErrorType $ get_var sc name
+    | Lit t x => Unit
+    | Call name cargs => fmap_or (fun f => if map type cargs == fun_args f then fun_returns f else Bot) ErrorType $ get_fun sc name 
   end.
 
+Inductive ContElem:=
+| Cstatement : statement -> ContElem
+| Pushctx
+| Popctx
+| FunEnd.
+       
 
-Program Definition binop_interp (t:ctype) (op: binop) : int -> int -> value t :=
+Program Definition binop_interp (t:ctype) (op: BinOpKind) : int -> int -> value t :=
   match t with |
             Int kind =>
             match op with
@@ -154,7 +139,7 @@ Program Definition binop_interp (t:ctype) (op: binop) : int -> int -> value t :=
   end
 .
 
-Program Definition unop_interp (t:ctype) (op: unop) : int -> value t :=
+Program Definition unop_interp (t:ctype) (op: UnOpKind) : int -> value t :=
   match t with |
             Int kind =>
             match op with
@@ -165,14 +150,6 @@ Program Definition unop_interp (t:ctype) (op: unop) : int -> value t :=
   end
 .
 
-Definition find_block (m: dynamic_ctx) (i: nat)  : option block :=
-  option_find (fun b=> block_id b == i) $ memory m.
-
-Definition find_block_state (s:prog_state) (i:nat) : option block :=
-  match s with
-    | Good _ d => find_block d i
-    | Bad  _ _ _ => None
-  end.
 
 Program Definition dereference (tp:ctype) (v: value (Pointer tp)) (dyn:dynamic_ctx) : value tp :=
   let ret_type := value tp in
@@ -192,9 +169,177 @@ Program Definition dereference (tp:ctype) (v: value (Pointer tp)) (dyn:dynamic_c
 Next Obligation.  
     by apply /eqP.
 Defined.
+
+
+Definition option_nth {T:eqType} (s:seq T) (n: nat) := nth None (map (@Some T) s) n.
+Definition block_mod (b: block) (idx: nat) (e: value (el_type b)) : option block :=
+  if idx * ( SizeOf (el_type b)) >= block_size b then None
+  else @Some _ $ mk_block
+         (region b)
+         (block_id b)
+         (block_size b)
+         (el_type b)
+         (set_nth (Error _) (contents b) idx e).
+Definition ErrorBlock := mk_block Data 0 0 ErrorType [::].
+
+Program Definition mem_write (t: ctype) (id: nat) (pos: nat) (dyn: dynamic_ctx) (val: value t) : option dynamic_ctx :=
+  let m := memory dyn in
+  let oldblock := option_nth m id in
+  match oldblock with
+    | Some _oldblock =>
+      match ctype_beq t (el_type _oldblock) as Ht with
+        | true => let p := Deref t $ Goodptr t id pos in
+                  match block_mod _oldblock pos (cast val _) with
+                            | Some newblock => @Some _ $ mk_dyn_ctx ( set_nth ErrorBlock m id newblock ) (reads dyn) (p::writes dyn)
+                            | _ => None
+                  end
+        | _ => None
+      end
+    | None => None
+  end.
+Next Obligation.
+  symmetry in Heq_Ht.
+  move /eqP in Heq_Ht.
+    by rewrite Heq_Ht.
+Defined.
+
+
+(* None if UB *) (*
+Fixpoint flush_effects (dyn: dynamic_ctx) : option dynamic_ctx :=
+  let: mk_dyn_ctx eff mem := dyn in
+  match eff with
+    | nil => Some dyn
+    | (Effect t (Goodptr b off) v)::es => mem_write t b off (mk_dyn_ctx es mem) v
+    | _ => None
+  end.*)
+
+(*Fixpoint concat_effects (x y: dynamic_ctx) : (seq effect) ? :=
+  match  let: mk_dyn_ctx eff mem := dyn in
+  match eff with
+    | nil => Some dyn
+    | (Effect t (Goodptr b off) v)::es => mem_write t b off (mk_dyn_ctx es mem) v
+    | _ => None
+  end.
+*)
+Inductive sexpr  : Set :=
+| SPush t: value t -> sexpr
+| SBinOp: BinOpKind -> sexpr
+| SUnOp: UnOpKind -> sexpr
+| SCall: string -> sexpr
+| SAssign
+| SRead: string -> sexpr
+.
+
+Fixpoint unsome {T} (s:seq (option T)) :=
+  match s with
+    | x::xs => match x with
+                 | Some x => Some [::x] /++/ unsome xs
+                 | None => None
+               end
+    | nil => Some nil
+  end.
+
+Fixpoint to_stack_code (c:static_ctx) (e: expr): seq sexpr ? :=
+  let f := to_stack_code c in
+  match e with
+    | Assign l r => f l /++/ f r /++/ Some [:: SAssign]
+    | Binop c l r => f l /++/ f r /++/ Some [:: SBinOp c]
+    | UnOp c o => f o /++/ Some [:: SUnOp c]
+    | Var x => Some [:: SRead x ]
+    | Lit t x => Some [:: @SPush t (Value t t Logic.eq_refl x) ]
+    | Call name args => option_map flatten ( unsome (map f args)) /++/ Some [::SCall name ]
+  end.
+
+Definition Plus := Binop Add.
+Definition Int := Lit Int32.
+
+Let ex_expr := Plus (Int 1) $ Plus (Int 9) $ Plus (Call "f" [::Var "x"]) $ Call "g" [:: Call "h" [:: Var "x"]; Call "k" [::Var "x"]].
+
+
+Print mk_fun.
+Definition Ff := mk_fun 1 "f" [:: Int64] Int64 $ Sequence nil.
+Definition Fg := mk_fun 2 "g" [:: Int64; Int64] Int64 $ Sequence nil.
+Definition Fh := mk_fun 3 "h" [:: Int64] Int64 $ Sequence nil.
+Definition Fk := mk_fun 4 "k" [:: Int64] Int64 $ Sequence nil.
+Definition dummy_stat_ctx := mk_stat_ctx [:: Ff; Fg; Fh; Fk] [::[:: declare_var "x" Int64 5]].
+
+Import Types.
+Compute to_stack_code dummy_stat_ctx ex_expr.
+
+Inductive stack_elem := | mk_stack_elem: forall t, value t -> dynamic_ctx -> stack_elem.
+
+(* Todo: need to copy all values*)
+(* Maybe we need an implicit CONSISTENCY term? *)
+Definition apply_writes (from to: dynamic_ctx)  :=
+  let wrs := writes from in
+  let folder (c: dynamic_ctx?) (d:deref) :=
+      match c with
+          | Some c => 
+      match d with
+        | Deref t (Goodptr b o) as p =>
+          match dereference t (Value (Pointer t) (Pointer t) Logic.eq_refl (Goodptr _ b o) ) from with
+            | Value _ x _  as val => mem_write t b o to val
+            | _ => None
+          end
+        | _ => None
+      end
+          | None => None
+      end
+  in
+
+  foldl folder (Some to) wrs.
+
+
+
+Check map (fun f:deref => match f with  | Deref t (Goodptrt b o) =>   (writes dynamic_ctx_empty).
+  
+  .
+  
+  Definition apply_writes (from to: dynamic_ctx) :=
+  let ws := writes from in
   
 
-Program Fixpoint iexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:expr): value (@type_solver stat e) :=
+                    
+  Fixpoint merge_dyn_ctx (x y: dynamic_ctx) : dynamic_ctx :=
+  match x,y with
+    | mk_dyn_ctx  mx rx wx,
+      mk_dyn_ctx  my ry wy =>
+  end.
+
+Fixpoint isexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:sexpr) (s: seq stack_elem) : seq stack_elem ?:=
+  match e with
+    | SPush t x => @Some _ $ mk_stack_elem t x dyn :: s
+    | SBinOp op =>
+      match s with
+        | mk_stack_elem tx vx dx  :: mk_stack_elem ty vy dy :: ss =>
+          match mergectx dx dy with
+            | Some m=>
+              eq_value_or_error_proved_arith tx ty
+                                             (fun _ _ => Some ( pair ( binop_interp tx op (cast vx _) (cast vy _) ) m::ss) )
+                                             None
+            | None => None
+          end
+        | _ => None 
+      end
+    | SUnOp x => _
+    | SCall x => _
+    | SAssign => _
+    | SRead x => _
+  end
+.
+
+      match s with
+        | (mk_elem (Int _) (Value (Int kx) _ x) dx) ::
+          (mk_elem (Int _) (Value (Int ky) _ y)  dy) :: ss =>
+          @Some _ $ mk_elem (Int kx)
+          ( eq_value_or_error_proved_arith (Int kx) (Int ky)  
+                                          (fun _ _ =>  binop_interp (Int kx) op (cast x _) (cast y _) ) (Error _)
+                                          )  :: ss
+        | _ =>  None
+      end
+
+Fixpoint iexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:expr): value (@type_solver stat e) ? * seq ContElem  
+      :=
   let interp := iexpr stat dyn in
   let type := @type_solver $ stat in
   let ret_type := value $ type e in
@@ -270,41 +415,10 @@ Definition remove_static_ctx (s:prog_state) :=
                   | s => s
   end.
 
-Definition block_mod (b: block) (idx: nat) (e: value (el_type b)) : option block :=
-  if idx * ( SizeOf (el_type b)) >= block_size b then None
-  else Some $ mk_block
-         (region b)
-         (block_id b)
-         (block_size b)
-         (el_type b)
-         (set_nth (Error _) (contents b) idx e).
 
 Definition ex_block := mk_block Stack 0 64 Int64 (garbage_values 8).
 Eval compute in block_mod ex_block 1 (Value Int64 Int64 _ 3).
 
-Definition ErrorBlock := mk_block Data 0 0 ErrorType [::].
-
-Definition option_nth {T:eqType} (s:seq T) (n: nat) := nth None (map Some s) n.
-
-Program Definition mem_write (t: ctype) (id: nat) (pos: nat) (dyn: dynamic_ctx) (val: value t) : option dynamic_ctx :=
-  let m := memory dyn in
-  let oldblock := option_nth m id in
-  match oldblock with
-    | Some _oldblock =>
-      match ctype_beq t (el_type _oldblock) as Ht with
-        | true => match block_mod _oldblock pos (cast val _) with
-                            | Some newblock => Some $ mk_dyn_ctx $ set_nth ErrorBlock m id newblock
-                            | _ => None
-                  end
-        | _ => None
-      end
-    | None => None
-  end.
-Next Obligation.
-  symmetry in Heq_Ht.
-  move /eqP in Heq_Ht.
-    by rewrite Heq_Ht.
-Defined.
 
 Definition add_var (vd:var_descr) (c: static_ctx) (i:nat) :=
   mk_stat_ctx
@@ -518,33 +632,3 @@ Fixpoint interpret (steps: nat) (state: prog_state) (cont: seq statement): prog_
       end
     | _, _ => (state, cont)
   end
-        
-
-.
-
-(* !!! obliged to do cbn !  *)
-Eval compute in interpret 9 state_init (sample_prog::nil).
-
-
-
-Eval compute in eval (fst testr) (Var "x").
-
-
-Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
-Definition ex_var_x := LocVar Int8 "x" .
-Definition ex_var_py := LocVar (Pointer Int8) "y".
-Definition ex_literal := Lit Int64 (Negz 4).
-
-Definition neg_expr := Unop Neg ex_literal.
-Definition add_expr := Binop Add neg_expr ex_literal. 
-
-Definition ex_var_x_expr := Var "x".
-
-Definition ex_skip := Skip.
-Definition ex_alloc := LocVar Int64 "x".
-Definition ex_varalloc_stat  := interpreter_step ex_alloc state_init.
-Compute ex_varalloc_stat.
-
-
-Eval compute in eval ex_varalloc_stat ex_var_x_expr.
-

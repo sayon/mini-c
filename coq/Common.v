@@ -13,6 +13,7 @@ Hint Unfold _dollar.
 
 Definition cast {A B : Type} (a: A ) (H: A= B ) : B. rewrite <- H. exact a. Defined.
 Notation "/! x" := (cast x _) (at level 100, no associativity).
+Notation "x ?" := (option x) (at level 150, left associativity).
 
 
 
@@ -60,3 +61,16 @@ Theorem seq_eq_dec T: eq_dec T -> eq_dec ( seq T ).
          ** by right; case. 
          ** by right; case.
 Qed.
+
+Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
+  nth None (map (@Some T) s) (find (option_map p) (map (@Some T) s)).
+
+
+
+
+Definition cat_if_some {T} (l r: option ( seq T) ) : option (seq T):=
+  match l, r with
+    | Some x, Some y => Some ( x ++ y )
+    | _, _ => None
+    end.
+Notation "x /++/ y" := (cat_if_some x y) (at level 35).
