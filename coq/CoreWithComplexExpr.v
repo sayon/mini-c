@@ -75,13 +75,24 @@ Record static_ctx : Set := mk_stat_ctx {
 
 Definition static_ctx_empty:= mk_stat_ctx [::] [::].
 
-Inductive deref := | Deref : forall t:ctype,  ptr t -> deref.
+Inductive deref :Set := | Deref : forall t:ctype,  ptr t -> deref.
+           Theorem deref_eq_dec: eq_dec deref.
+             rewrite /eq_dec. move => [t p [t' p']].
+             move: (ctype_eq_dec t t') =>[].
+             - move => Ht. subst. move: (ptr_eq_dec t' p p') =>[]. move=>->; by left.
+             - move => Hneq; right. case => H. by depcomp H.
+             - move => Hneq; right. by case.
+           Defined.
+           Definition deref_eqP := reflect_from_dec deref_eq_dec.
+           Canonical deref_eqMixin := EqMixin deref_eqP.
+           Canonical deref_eqType := EqType deref deref_eqMixin.
 
-Record dynamic_ctx : Set := mk_dyn_ctx { memory: seq block; reads: seq deref; writes: seq deref }.
+           
+Record dynamic_ctx : Type := mk_dyn_ctx { memory: seq block; reads: sset deref_eqType; writes: sset deref_eqType }.
 (* 0th block for Unit? NO we dont need that
 1-N blocks for functions*)
 
-Definition dynamic_ctx_empty := mk_dyn_ctx [::] [::] [::].
+Program Definition dynamic_ctx_empty := mk_dyn_ctx [::] ( SSet _ [::] _ ) (SSet  _ [::] _) .
 
 Inductive prog_state :=
 | Good: static_ctx -> dynamic_ctx -> prog_state
@@ -189,8 +200,9 @@ Program Definition mem_write (t: ctype) (id: nat) (pos: nat) (dyn: dynamic_ctx) 
     | Some _oldblock =>
       match ctype_beq t (el_type _oldblock) as Ht with
         | true => let p := Deref t $ Goodptr t id pos in
+                  let newwrites := union (mk_set p) (writes dyn) in
                   match block_mod _oldblock pos (cast val _) with
-                            | Some newblock => @Some _ $ mk_dyn_ctx ( set_nth ErrorBlock m id newblock ) (reads dyn) (p::writes dyn)
+                            | Some newblock => @Some _ $ mk_dyn_ctx ( set_nth ErrorBlock m id newblock ) (reads dyn) newwrites
                             | _ => None
                   end
         | _ => None
@@ -289,26 +301,27 @@ Definition apply_writes (from to: dynamic_ctx)  :=
 
   foldl folder (Some to) wrs.
 
-
-
-Check map (fun f:deref => match f with  | Deref t (Goodptrt b o) =>   (writes dynamic_ctx_empty).
-  
-  .
-  
-  Definition apply_writes (from to: dynamic_ctx) :=
-  let ws := writes from in
-  
-
                     
-  Fixpoint merge_dyn_ctx (x y: dynamic_ctx) : dynamic_ctx :=
+Fixpoint merge_dyn_ctx (x y: dynamic_ctx) : dynamic_ctx? :=
   match x,y with
     | mk_dyn_ctx  mx rx wx,
       mk_dyn_ctx  my ry wy =>
+      match size $ intersect wx wy, size $ intersect rx wy, size $ intersect wx ry with
+        | 0,0,0 =>
+          match apply_writes x y with
+            | Some (mk_dyn_ctx mn rn wn) => @Some _ $ mk_dyn_ctx mn  (union rx ry) (union wx wy)
+            | None => None
+          end
+        | _, _, _ => None
+      end
   end.
+
 
 Fixpoint isexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:sexpr) (s: seq stack_elem) : seq stack_elem ?:=
   match e with
     | SPush t x => @Some _ $ mk_stack_elem t x dyn :: s
+    | SUnOp x => _
+
     | SBinOp op =>
       match s with
         | mk_stack_elem tx vx dx  :: mk_stack_elem ty vy dy :: ss =>
@@ -321,7 +334,6 @@ Fixpoint isexpr (stat: static_ctx) (dyn: dynamic_ctx) (e:sexpr) (s: seq stack_el
           end
         | _ => None 
       end
-    | SUnOp x => _
     | SCall x => _
     | SAssign => _
     | SRead x => _

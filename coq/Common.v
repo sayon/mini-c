@@ -63,9 +63,12 @@ Theorem seq_eq_dec T: eq_dec T -> eq_dec ( seq T ).
 Qed.
 
 Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
-  nth None (map (@Some T) s) (find (option_map p) (map (@Some T) s)).
+  match filter p s with
+    | nil => None
+    | x::_ => Some x
+    end.
 
-
+Definition option_nth {T:eqType} (s:seq T) (n: nat) := nth None (map (@Some _) s) n.
 
 
 Definition cat_if_some {T} (l r: option ( seq T) ) : option (seq T):=
