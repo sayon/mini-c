@@ -27,7 +27,7 @@ Record var_descr := declare_var { var_name: string; var_type: ctype; location: n
        Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
 
   
-Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr .
+Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr | Eq .
        Scheme Equality for binop.
        Definition binop_eqP := reflect_from_dec binop_eq_dec.
        Canonical binop_eqMixin := EqMixin binop_eqP.
@@ -61,7 +61,7 @@ Inductive expr :=
 
 Inductive statement :=
        | Skip
-       | Call : expr -> seq expr -> statement (* return values do not exist *)
+       | Call : string -> seq expr -> statement (* return values do not exist *)
        | Assign: expr -> expr -> statement
        | Alloc: storage -> ctype -> option string -> nat -> statement
        | If: expr -> statement -> statement -> statement
@@ -74,8 +74,9 @@ Inductive statement :=
 Record function := mk_fun {
                        fun_id: nat;
                        fun_name: string;
-                       args: seq ctype;
-                       body: statement; }. (* all functions are void; if they return smth it is written by pointer passed as arg *)
+                       args: seq (string * ctype);
+                       body: statement;
+                       fun_location: nat}. (* all functions are void; if they return smth it is written by pointer passed as arg *)
 
 Record static_ctx : Set := mk_stat_ctx { functions: seq function; variables: seq ( seq var_descr ) }.
        Definition stat_ctx_empty:= mk_stat_ctx [::] [::].
@@ -118,25 +119,28 @@ Program Definition binop_interp (t:ctype) (op: binop) : int -> int -> value t :=
   match t with
     | Int kind =>
       match op with
-        |Add => fun x y=> @Value t t _ $ cast (addz x y ) _
-        |Sub => fun x y=> @Value t t _ $ cast (addz x (oppz y) ) _
+        | Add => fun x y=> @Value t t _ $ /! addz x y
+        | Sub => fun x y=> @Value t t _ $ /! addz x (oppz y) 
+        | Eq => fun x y => @Value t t _ $ /! Posz $ if x == y then 1 else 0
         | _ => (fun _ _ => Error _)
       end
     | _ => (fun _ _ => Error _)
   end.
 Solve All Obligations with done.
-
+  
 Program Definition unop_interp (t:ctype) (op: unop) : int -> value t :=
   match t with |
             Int kind =>
             match op with
-              |Neg => fun x => @Value t t _ $ cast (oppz x) _
+              | Neg => fun x => @Value t t _ $ cast (oppz x) _
+              | Not => fun x => @Value t t _ $ /! (if sgz x == 0 then Posz 1 else Posz 0) 
               | _ => fun _ => Error _
             end
             | _ => fun _ => Error _
   end
 .
-
+Solve All Obligations with done.
+  
 
 Definition find_block (m: dynamic_ctx) (i: nat)  : option block :=
   option_find (fun b=> block_id b == i) $ memory m.
@@ -376,9 +380,9 @@ Definition eval ps e: value ( @type_solver ( get_stat ps) e ) :=
        have option_eq_dec t: eq_dec t ->  eq_dec (option t). by rewrite /eq_dec =>H; decide equality.
        decide equality.
        apply ( seq_eq_dec _ expr_eq_dec).
+       apply string_eq_dec.
        apply expr_eq_dec.
        apply expr_eq_dec.
-       apply expr_eq_dec.     
        apply nat_eq_dec.
        apply (option_eq_dec _ string_eq_dec).
        apply ctype_eq_dec.
@@ -400,7 +404,118 @@ Definition eval ps e: value ( @type_solver ( get_stat ps) e ) :=
      Canonical statement_eqType := EqType statement statement_eqMixin.
 
      (* Todo: make the lists potentially infinite? *)
-     
+
+     (* Add: 
+* Check if expression types are corresponding to arguments;
+* Throw in assignments 
+*)
+
+Theorem type_iso: forall (T U : Type), T = U ->
+                                   exists (f : T -> U) (g : U -> T),
+                                     (forall t, (g (f t)) = t) /\ (forall u, (f (g u)) = u).
+  move=> T U ->. by  exists (@id U); exists (@id U).
+Qed.
+
+Theorem set_iso:forall (T U : Set), T = U ->
+                                   exists (f : T -> U) (g : U -> T),
+                                     (forall t, (g (f t)) = t) /\ (forall u, (f (g u)) = u).
+  move=> T U ->. by  exists (@id U); exists (@id U).
+Qed.
+
+                            
+Theorem nat_neq_bool_T: @eq Type nat bool -> False.
+  move /type_iso => [f [g [HI _]]].
+
+  have Hc m n o: f m = f n \/ f n = f o \/ f m = f o.
+  by case (f m); case (f n); case (f o); tauto. 
+
+  move: (HI 0) (HI 1) (HI 2) (Hc 0 1 2).
+  case: (f 0); case (f 1); case (f 2); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem nat_neq_bool_S: @eq Set nat bool -> False.
+  move /set_iso => [f [g [HI _]]].
+
+  have Hc m n o: f m = f n \/ f n = f o \/ f m = f o.
+  by case (f m); case (f n); case (f o); tauto. 
+
+  move: (HI 0) (HI 1) (HI 2) (Hc 0 1 2).
+  case: (f 0); case (f 1); case (f 2); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem nat_neq_unit_T: @eq Type nat unit -> False.
+  move /type_iso => [f [g [HI _]]].
+  have Hc m n: f m = f n.
+  by case (f m); case (f n); tauto.
+
+  move: (HI 0) (HI 1) (Hc 0 1).
+  case: (f 0); case (f 1); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem nat_neq_unit_S: @eq Set nat unit -> False.
+  move /set_iso => [f [g [HI _]]].
+  have Hc m n: f m = f n.
+  by case (f m); case (f n); tauto.
+
+  move: (HI 0) (HI 1) (Hc 0 1).
+  case: (f 0); case (f 1); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem int_neq_unit_T: @eq Type int  unit -> False.
+  move /type_iso => [f [g [HI _]]].
+  have Hc m n: f m = f n.
+  by case (f m); case (f n); tauto.
+
+  move: (HI 0) (HI 1) (Hc 0 1).
+  case: (f 0); case (f 1); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem int_neq_unit_S: @eq Set int  unit -> False.
+  move /set_iso => [f [g [HI _]]].
+  have Hc m n: f m = f n.
+  by case (f m); case (f n); tauto.
+
+  move: (HI 0) (HI 1) (Hc 0 1).
+  case: (f 0); case (f 1); by [move=>-> | move => _ ->].
+Qed.
+
+Theorem seq_nat_neq_unit: @eq Type (seq nat)  unit -> False.
+  move /type_iso => [f [g [HI _]]].
+  have Hc m n: f m = f n.
+  by case (f m); case (f n); tauto.
+
+  move: (HI nil) (HI (cons 1 nil)) (Hc (cons 1 nil)).
+  case: (f nil); case (f (cons 1 nil)); by [move=>-> | move => _ ->].
+Qed.
+    
+
+Definition LitFromExpr (ps: prog_state) (e:expr): expr ?:=
+  match eval ps e  with
+    | Value _t  t v => Some (  Lit _t v )
+    | Garbage =>  None 
+    | Deallocate => None 
+  end .
+
+
+Definition prologue_arg (ps: prog_state) (name:string) (t:ctype) (e:expr) :=
+  option_map (fun l =>  [:: Alloc Stack t (Some name) 1; Assign (Var name) l] ) $ LitFromExpr ps e.
+
+Definition prologue_args (ps:prog_state) (f:function) (es: seq expr) :=
+  let vals :=  map (fun a => prologue_arg ps (fst (fst a)) (snd (fst a)) (snd a)) $ zip (args f) es in
+  foldl cat_if_some (Some nil) vals.
+
+Definition prologue_for (ps: prog_state) (f:function) (argvals: seq expr) : option ( seq statement)  :=
+  option_map (cons Enter) $ prologue_args ps f argvals.
+
+
+Definition epilogue_for (f:function) : seq statement := [:: Leave]. (*TODO add assign DEALLOCATED *)
+ (* For future uses*)
+Definition fun_by_address {t} (p: ptr t) (stat:static_ctx) (dyn:dynamic_ctx) : function? :=
+  match p with 
+    | Goodptr b o => option_find (fun f=> fun_location f == b) $ functions stat
+    | _ => None
+  end.
+
 Program Fixpoint interpreter_step (s: prog_state) : prog_state :=
   match s with
     | Good _ (mk_dyn_ctx _ nil) => s
@@ -409,13 +524,23 @@ Program Fixpoint interpreter_step (s: prog_state) : prog_state :=
       let bad := Bad oldstat olddyn st in
     match st with
       | Skip => Good oldstat dyn
-      | Call x x0 => s (* TODO *)
+      | Call fname fargs =>
+        match get_fun oldstat fname with
+          | Some f =>
+            match prologue_for s f fargs with
+              | None => bad
+              | Some prologue =>  
+                Good oldstat $ dyn_ctx_mod dyn id (fun x => prologue ++ body f :: epilogue_for f ++ x)
+            end
+          | None => bad
+        end
+          
       | Assign w val  =>
         match eval s w, eval s val with
           | Value (Pointer t) _ (Goodptr to off), Value vtype _ v =>                           
             match vtype == t with
               | true =>
-                    match mem_write t to off dyn (Value t t _  (cast v _) ) with
+                match mem_write t to off dyn (Value t t _  (cast v _) ) with
                       | Some d => Good oldstat d
                       | None => bad
                     end
@@ -464,7 +589,33 @@ Next Obligation.
   apply value_inj in H.
   inversion H.
 Defined.
-  
+
+Definition init_state_for (s:statement) := Good (stat_ctx_mod stat_init (fun _=> [:: mk_fun 0 "main" nil s 0 ] ) id ) $
+                                                mk_dyn_ctx  nil [:: s] .
+                                                
+
+
+Fixpoint interpret (steps:nat) (state: prog_state) :=
+  match steps with | 0 => state
+                | S steps => match state with
+                               |Bad _ _ _ => state
+                               |Good _ _ => interpret steps $ interpreter_step state
+                             end
+  end.
+
+Definition statement_state (s:prog_state) (st:statement) := match s with
+                                                              | Good x dc => Good x $ dyn_ctx_mod dc id (cons st)
+                                                              | Bad x x0 x1 => s
+                                                            end.
+Definition isbad s := match s with | Bad _ _ _ => true | _ => false end.
+
+Definition start_from_0th_fun (c:static_ctx): dynamic_ctx :=
+  match ohead $ functions c with
+    | None => dynamic_ctx_empty
+    | Some main => dyn_ctx_push dynamic_ctx_empty (body main)
+  end.
+
+
 Definition LocVar t name := Alloc Stack t (Some name%string) 1. 
 
 Notation "{  x1 ; .. ; xn }" := (CodeBlock(  cons x1  .. (cons xn nil) ..) ) (at level 35, left associativity) : c. 
@@ -472,7 +623,11 @@ Notation "'int8 x " := (LocVar Int8 x) (at level 200, no associativity) :c.
 Notation "'uint8 x " := (LocVar UInt8 x) (at level 200, no associativity) :c.
 Notation "'int16 x " := (LocVar Int16 x) (at level 200, no associativity) :c.
 Notation "'uint16 x " := (LocVar UInt16 x) (at level 200, no associativity) :c.
-Check Assign (Var "x") (Lit Int64 4).
+Notation "'int32 x " := (LocVar Int32 x) (at level 200, no associativity) :c.
+Notation "'uint32 x " := (LocVar UInt32 x) (at level 200, no associativity) :c.
+Notation "'int64 x " := (LocVar Int64 x) (at level 200, no associativity) :c.
+Notation "'uint64 x " := (LocVar UInt64 x) (at level 200, no associativity) :c. 
+
 
 Notation "' v := value" := (Assign (Var v) (value) ) (at level 200, no associativity) :c.
 Delimit Scope c with c.
@@ -493,57 +648,66 @@ Definition sample_prog1 := {
                              'int16 "y";
                              ' "x" := Lit Int16 2
                            }
-                         }%c .
-Definition init_state_for (s:statement) := Good (stat_ctx_mod stat_init (fun _=> [:: mk_fun 0 "main" nil s ] ) id ) $
-                                                mk_dyn_ctx  nil [:: s] .
-                                                
+                          }%c .
+Open Scope string.
+Definition sample_call : static_ctx := mk_stat_ctx [::
+                                                      mk_fun 0 "main" [::] ({
+                                                                               'int64 "x";
+                                                                               Call "f" [:: Var "x"]
+                                                                             })%c 0;
+                                                     mk_fun 1 "f" [:: ("x", (Pointer Int64)) ]
+                                                            ({
+                                                                Assign (Unop Asterisk (Var "x")) $ Lit Int64 2
+                                                              })%c 1 ]
+                                                   nil.
+Inductive _value : Set :=
+| _Int : numeric -> int -> _value
+| _Pointer : nat -> nat -> _value
+| _Nullptr
+| _Struct : seq nat -> _value
+| _Unit
+| _Bot
+| _Garbage
+| _Deallocated
+| _Error.
 
+Inductive _block : Set := _mk_block
+  { _: storage;
+    _id : nat;
+    _size : nat;
+    _: ctype;
+    _: seq _value }.
 
-Fixpoint interpret (steps:nat) (state: prog_state) :=
-  match steps with | 0 => state
-                | S steps => match state with
-                               |Bad _ _ _ => state
-                               |Good _ _ => interpret steps $ interpreter_step state
-                             end
+Definition readable_val (t:ctype) (v:  value t) : _value :=
+  match v with
+    | Value (Int n) _ c => _Int n c
+    | Value Unit _ _ => _Unit
+    | Value Bot _ _  => _Bot
+    | Value (Pointer t) _ (Goodptr x y) => _Pointer  x y
+    | Value (Pointer t) _ Nullptr => _Nullptr
+    | Value (Struct _ ) _ l => _Struct l
+    | Value ErrorType  _ _ => _Error
+    | Garbage => _Garbage
+    | Deallocated => _Deallocated
+    | Error => _Error
   end.
 
-Definition statement_state (s:prog_state) (st:statement) := match s with
-                                                              | Good x dc => Good x $ dyn_ctx_mod dc id (cons st)
-                                                              | Bad x x0 x1 => s
-                                                            end.
-Definition isbad s := match s with | Bad _ _ _ => true | _ => false end.
+Definition readable_mem :=
+  let torb (b:block):_block :=
+      match b with
+        | mk_block st id sz t vs => _mk_block st id sz t $ map (readable_val t) vs
+      end
+  in
+  map torb.
 
-Compute interpret 4 (init_state_for test_assign).
+Definition look_mem (ps:prog_state) := readable_mem $ memory $ get_dyn ps.
 
-Definition ts := Eval compute in interpret 6 (init_state_for sample_prog1).
+Definition t := Eval compute in let steps := 10
+in
+        let state_init := Good sample_call $ start_from_0th_fun sample_call  in
+        let state := interpret steps state_init in
+        let stat := get_stat state in
+        let f := get_fun stat "f" in
+         state.
 
-Open Scope c.
-Compute interpreter_step $ statement_state ts $ ' "x" := Lit Int8 10 . 
-
-
-
-
-        Extraction "tt.ml" t.
-
-
-Eval compute in eval (fst testr) (Var "x").
-
-
-Definition ex1 := Alloc Stack (Int S64) (Some "x"%string) 1.
-Definition ex_var_x := LocVar Int8 "x" .
-Definition ex_var_py := LocVar (Pointer Int8) "y".
-Definition ex_literal := Lit Int64 (Negz 4).
-
-Definition neg_expr := Unop Neg ex_literal.
-Definition add_expr := Binop Add neg_expr ex_literal. 
-
-Definition ex_var_x_expr := Var "x".
-
-Definition ex_skip := Skip.
-xcDefinition ex_alloc := LocVar Int64 "x".
-Definition ex_varalloc_stat  := interpreter_step ex_alloc state_init.
-Compute ex_varalloc_stat.
-
-
-Eval compute in eval ex_varalloc_stat ex_var_x_expr.
-
+Extraction "tt.ml" t.
