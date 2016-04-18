@@ -8,7 +8,7 @@ Definition storage_eqP := reflect_from_dec storage_eq_dec.
 Canonical storage_eqMixin := EqMixin storage_eqP.
 Canonical storage_eqType := EqType storage storage_eqMixin.
 
-Inductive block := mk_block {
+Inductive block vt := mk_block {
                        region: storage;
                        block_id: nat;
                        block_size: nat;

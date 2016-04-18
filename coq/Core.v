@@ -7,7 +7,7 @@ Require Import UtilString.
 Require Import ProofIrrelevance.
 Import intZmod.  
 Require Import Common Types Memory Extraction.
-
+Require Import ExtrOcamlBasic.
 
        
 Record var_descr := declare_var { var_name: string; var_type: ctype; location: nat }.
@@ -676,7 +676,7 @@ Inductive _block : Set := _mk_block
     _id : nat;
     _size : nat;
     _: ctype;
-    _: seq _value }.
+    _contents: seq _value }.
 
 Definition readable_val (t:ctype) (v:  value t) : _value :=
   match v with
@@ -702,12 +702,18 @@ Definition readable_mem :=
 
 Definition look_mem (ps:prog_state) := readable_mem $ memory $ get_dyn ps.
 
-Definition t := Eval compute in let steps := 10
-in
+Definition t := fun steps=> (*let steps := 10*)
         let state_init := Good sample_call $ start_from_0th_fun sample_call  in
         let state := interpret steps state_init in
         let stat := get_stat state in
         let f := get_fun stat "f" in
-         state.
+        state.
+
+(*Compute t 10.*)
+
+(*Compute option_map ( eqseq [::_Pointer 0 0 ]) (option_map _contents $ ohead $  drop 1 $  readable_mem  $ memory $ get_dyn $ t 9).*)
+
+
+Extraction "interp.ml" t.
 
 Extraction "tt.ml" t.
