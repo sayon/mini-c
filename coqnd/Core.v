@@ -67,9 +67,9 @@ Inductive statement :=
        | Assign: expr -> expr -> statement
        | Alloc: storage -> ctype -> option string -> nat -> statement
        | If: expr -> statement -> statement -> statement
-(*       | For: statement -> expr -> statement -> statement -> statement*)
        | While: expr -> statement -> statement
        | CodeBlock: seq statement -> statement
+       | Debug
        | Enter
        | Leave .
 
@@ -401,7 +401,7 @@ Definition prologue_args (ps:prog_state) (f:function) (es: seq expr) :=
 
 Definition prologue_for (ps: prog_state) (f:function) (argvals: seq expr) : option ( seq statement)  :=
   option_map (cons Enter) $ prologue_args ps f argvals.
-
+(*
 Definition epilogue_arg (ps: prog_state) (name:string) (t:ctype) (e:expr) :=
   Some [:: Assign (Var name) (EDeallocated t)] .
 
@@ -409,14 +409,20 @@ Definition epilogue_arg (ps: prog_state) (name:string) (t:ctype) (e:expr) :=
 Definition epilogue_args (ps:prog_state) (f:function) (es: seq expr) :=
   let vals :=  map (fun a => epilogue_arg ps (fst (fst a)) (snd (fst a)) (snd a)) $ zip (args f) es in
   foldl cat_if_some (Some nil) vals.
+ *)
 
-Definition epilogue_for (ps: prog_state) (f:function) (argvals: seq expr) : option ( seq statement)  :=
-  option_map (fun x => x ++ [:: Leave]) $ epilogue_args ps f argvals.
+Definition epilogue_for (ps: prog_state) (f:function) (argvals: seq expr) : option ( seq statement)  := Some [:: Leave].
+(*  option_map (fun x => x ++ [:: Leave]) $ epilogue_args ps f argvals. *)
 
 Definition fun_by_address {t} (p: ptr t) (stat:static_ctx) (dyn:dynamic_ctx) : function? :=
   match p with 
     | Goodptr b o => option_find (fun f=> fun_location f == b) $ functions stat
     | _ => None
+  end.
+Definition extract_some {T} (x:  T ? ? ) : T? :=
+  match x with
+    |Some x => x
+    | None => None
   end.
 
 Fixpoint interpreter_step (s: prog_state) : prog_state :=
@@ -437,7 +443,7 @@ Fixpoint interpreter_step (s: prog_state) : prog_state :=
             end
           | None => bad
         end
-          
+      | Debug => s         
       | Assign w val  =>
         match eval s w, eval s val with
           | Value (Pointer t)  (Goodptr to off), Value vtype v =>                           
@@ -476,7 +482,17 @@ Fixpoint interpreter_step (s: prog_state) : prog_state :=
                          let newdyn := dyn_ctx_mod dyn id (cat bc) in
                          Good oldstat newdyn
       | Enter => add_static_ctx $ Good oldstat dyn
-      | Leave => remove_static_ctx $ Good oldstat dyn
+      | Leave =>let newdyn :=
+                    match variables $ oldstat with
+                      | v::vv =>
+                        @foldl  (var_descr) (option dynamic_ctx)
+                               (fun sd v => extract_some $ option_map (fun sd=>mem_write sd (location v) 0 Deallocated) sd) (Some dyn) v
+                      | nil => None
+                    end in
+                match newdyn with
+                  | Some newdyn => remove_static_ctx $ Good oldstat newdyn
+                  | None => bad
+                end
     end
     | Bad stat dyn state => s
   end.
@@ -564,7 +580,8 @@ Definition sample_fact : static_ctx :=
                  mk_fun 0 "main" [::] ({{
                                            'int64 "x";
                                            ' Var "x" := /i 1;
-                                           Call "f" [:: AddrVar "x"; /i 5 ]
+                                           Call "f" [:: AddrVar "x"; /i 6 ];
+                                           Debug
                                          }}) 0;
                 
                 mk_fun 1 "f" [:: ("res", (Pointer Int64)); ("x", Int64) ]
@@ -619,102 +636,4 @@ Compute f  5 .
 Compute f  6 .
 Compute f  7 .
 Compute f  8 .
-Compute f  9 .
-Compute f  10 .
-Compute f  11 .
-Compute f  12 .
-Compute f  13 .
-Compute f  14 .
-Compute f  15 .
-Compute f  16 .
-Compute f  17 .
-Compute f  18 .
-Compute f  19 .
-Compute f  20 .
-Compute f  21 .
-Compute f  22 .
-Compute f  23 .
-Compute f  24 .
-Compute f  25 .
-Compute f  26 .
-Compute f  27 .
-Compute f  28 .
-Compute f  29 .
-Compute f  30 .
-Compute f  31 .
-Compute f  32 .
-Compute f  33 .
-Compute f  34 .
-Compute f  35 .
-Compute f  36 .
-Compute f  37 .
-Compute f  38 .
-Compute f  39 .
-Compute f  40 .
-Compute f  41 .
-Compute f  42 .
-Compute f  43 .
-Compute f  44 .
-Compute f  45 .
-Compute f  46 .
-Compute f  47 .
-Compute f  48 .
-Compute f  49 .
-Compute f  50 .
-Compute f  51 .
-Compute f  52 .
-Compute f  53 .
-Compute f  54 .
-Compute f  55 .
-Compute f  56 .
-Compute f  57 .
-Compute f  58 .
-Compute f  59 .
-Compute f  60 .
-Compute f  61 .
-Compute f  62 .
-Compute f  63 .
-Compute f  64 .
-Compute f  65 .
-Compute f  66 .
-Compute dumpvars $ f 87.
-Compute f  97 .
-Compute f  68 .
-Compute f  69 .
-Compute f  70 .
-Compute f  71 .
-Compute f  72 .
-Compute f  73 .
-Compute f  74 .
-Compute f  75 .
-Compute f  76 .
-Compute f  77 .
-Let ps := Eval vm_compute in  f 77.
-
-Compute eval ps (/* /* Var "res" ).
-
-Compute interpreter_step $ statement_state ps (Assign (Unop Asterisk (Var "res") ) (/i 4)).
-
-Compute f  78 .
-Compute f  79 .
-Compute f  80 .
-Compute f  81 .
-Compute f  82 .
-Compute f  83 .
-Compute f  84 .
-Compute f  85 .
-Compute f  86 .
-Compute f  87 .
-Compute f  88 .
-Compute f  89 .
-Compute f  90 .
-Compute f  91 .
-Compute f  92 .
-Compute f  93 .
-Compute f  94 .
-Compute f  95 .
-Compute f  96 .
-Compute f  97 .
-Compute f  98 .
-Compute intRing.mulz 5 3.
-Compute dumpvars $ f  113.
+Compute f  500.
