@@ -5,7 +5,7 @@ Require Import Coq.Program.Program.
 Require Import Program.
 Require Import UtilString.
 Require Import ProofIrrelevance.
-Import intZmod.   
+Import intZmod.    
 Require Import Common Types Memory Extraction.
 
 
@@ -75,10 +75,10 @@ Inductive statement :=
        | Enter
        | Leave
        | BspSync
-       | BspPushReg: expr-> statement
-       | BspPopReg: expr-> statement
-       | BspGet: nat -> expr-> expr-> statement
-       | BspPut: nat -> expr-> expr-> statement.
+       | BspPushReg: expr-> expr-> statement (* ptr and size *)
+       | BspPopReg: expr-> expr-> statement (* ptr and size *)
+       | BspGet: expr -> expr-> expr-> expr -> expr-> statement (* pid source offset dest size *)
+       | BspPut: expr -> expr-> expr-> expr -> expr -> statement. (* pid dest offset source size *)
 
 Record function := mk_fun {
                        fun_id: nat;
@@ -88,12 +88,11 @@ Record function := mk_fun {
                        fun_location: nat}. (* all functions are void; if they return smth it is written by pointer passed as arg *)
 
 
-Inductive get_query := Get t:  nat-> ptr t-> nat -> ptr t -> nat -> get_query .
-Inductive put_query := Put t:  nat-> ptr t-> nat -> ptr t -> nat -> put_query .
-Inductive push_query := Push t: ptr t -> push_query.
-Inductive pop_query := Pop t: ptr t -> pop_query.
+Inductive get_query := Get t:  nat-> ptr t-> int -> ptr t -> nat -> get_query .
+Inductive put_query := Put t:  nat-> seq value -> ptr t -> nat -> put_query .
+Inductive push_query := Push: anyptr -> nat -> push_query.
+Inductive pop_query := Pop: anyptr -> pop_query.
 
-Inductive anyptr := |AnyPtr t : ptr t-> anyptr.
 
 Record proc_state := mk_proc_state {
                          proc_id : nat;
@@ -156,7 +155,7 @@ Definition ps_mod_mem        f := ps_mod id id id id id f  id id.
 Definition ps_mod_cont       f := ps_mod id id id id id id f  id.
 Definition ps_mod_reg_loc    f := ps_mod id id id id id id id f .
 
-Inductive error_code := | OK | BadPointer | ModNonExistingBlock | BadWriteLocation | TypeMismatch | WritingGarbage | NonExistingSymbol | GenericError.
+Inductive error_code := | OK | BadPointer | ModNonExistingBlock | PointerOutsideBlock| BadWriteLocation | TypeMismatch | WritingGarbage | NonExistingSymbol | GenericError | InvalidPopReg | InvalidPushReg | InvalidGet | InvalidPut.
 Scheme Equality for error_code.
 Canonical error_code_eqMixin := EqMixin (reflect_from_dec error_code_eq_dec).
 Canonical error_code_eqType := EqType error_code error_code_eqMixin.
@@ -444,22 +443,18 @@ Qed.
      
      Canonical expr_eqMixin := EqMixin expr_eqP.
      Canonical expr_eqType := EqType expr expr_eqMixin.
-     
+       
      Theorem statement_eq_dec: eq_dec statement.
        rewrite /eq_dec.   
        fix 1.
        have option_eq_dec t: eq_dec t ->  eq_dec (option t). by rewrite /eq_dec =>H; decide equality.
-       decide equality.
+       decide equality; try apply expr_eq_dec.
        apply ( seq_eq_dec _ expr_eq_dec).
        apply string_eq_dec.
-       apply expr_eq_dec.
-       apply expr_eq_dec.
        apply nat_eq_dec.
        apply (option_eq_dec _ string_eq_dec).
        apply ctype_eq_dec.
        apply storage_eq_dec.
-       apply expr_eq_dec.
-       apply expr_eq_dec.
        elim: l l0.
          by case; [left | right].
          move=> a l H l0.
@@ -467,15 +462,7 @@ Qed.
          move=> s l1.
          move: (H l1) => [H0|H0]; move: (statement_eq_dec a s) => [H1|H1]; subst; 
                                                                   try by [left| right; case].
-         apply expr_eq_dec.
-       apply expr_eq_dec.
-       apply expr_eq_dec.
-       apply expr_eq_dec.
-       apply nat_eq_dec.
-       apply expr_eq_dec.
-       apply expr_eq_dec.
-       apply nat_eq_dec.
-     Defined.
+       Defined.
 
      Definition statement_eqP := reflect_from_dec statement_eq_dec.
      
@@ -516,12 +503,6 @@ Definition epilogue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq
     | _ => None
   end.*)
 
-Definition extract_some {T} (x:  T ? ? ) : T? :=
-  match x with
-    |Some x => x
-    | None => None
-  end.
-(*Good and bad for individual procs or machi ne altogether? *)
 
 Definition states_folder (ms:machine_state) (proc_step_result : (error_code * (statement?) * proc_state)) :=
   match ms with
@@ -550,8 +531,138 @@ Definition init_value (t:ctype) (l: storage) : value :=
     | Data =>  Garbage (*FIXME: Should be 0*)
   end.
 
+Definition add_n_z (x:nat) (y:int) :=
+  match addz x y with
+    | Negz r => None
+    | Posz r => Some r
+  end.
+
+Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=
+  match p with
+    | Nullptr => None
+    | Goodptr b o => Some $ Goodptr t b $ add_n_z o z
+  end.
+
+Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
+match ms with
+  | MGood  pss fs  =>
+    match option_nth pss pid with
+      | None => None
+      | Some ps => match option_nth (proc_memory ps) bid with
+                     | Some bl => Some (el_type bl, take size (drop offset (contents bl)))
+                     | None => None
+                   end
+    end
+  | MBad _ _ => None
+end.
+
+Fixpoint write_proc_memory (ms:machine_state) (pid:nat) (bid offset: nat) (vals: seq value) : machine_state? :=
+match ms with
+  | MGood  pss fs  =>
+    match option_nth pss pid, vals  with
+      | None,_ => None
+      | Some ps, v::vs =>
+        match mem_write bid offset v ps with
+          | (OK, news) => let newms := MGood (set_nth ps pss offset news) fs in
+                          write_proc_memory newms pid bid (offset.+1) vs
+          | _ => None
+        end
+      | _, nil => Some ms
+    end
+  | MBad _ _ => None
+end.
+
+Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
+  foldl (fun x f=> f x) init ts.
+
+Definition ms_mod_proc_all (f:proc_state->proc_state) (ms:machine_state) :=
+  match ms with
+    | MGood ps fs  => MGood (map f ps) fs
+    | MBad _ _ =>  ms
+  end.
+  
+Definition ms_mod_proc (pid:nat) (f:proc_state->proc_state) :=
+  ms_mod_proc_all (fun p=> if proc_id p == pid then f p else p).
+
+Definition push_reg_to_p_transform (p:push_query): proc_state -> proc_state :=
+  match p with
+    | Push pt sz => ps_mod_reg_loc (cons (pt, sz))
+  end.
+
+Definition push_reg_to_ms_transform (frompid: nat) (p:push_query) :machine_state -> machine_state :=
+  ms_mod_proc frompid ( push_reg_to_p_transform p ).
+
+Definition apply_push_regs (ms: machine_state) : machine_state :=
+  let pushes := flatten $ map (fun p => map  (push_reg_to_ms_transform (proc_id p)) (proc_queue_push_reg p)) (ms_procs ms) in
+  ms_mod_proc_all  (ps_mod_queue_push (const nil))   $ transformations ms pushes.
+
+  
+Definition slice_pop_requests (ms:machine_state) : (seq pop_query * machine_state) ? :=
+  let queries := seq_unsome $ map ( ohead \o proc_queue_pop_reg ) $ ms_procs ms in
+  let newms := ms_mod_proc_all (ps_mod_queue_pop (drop 1)) ms in
+  option_map (fun x => (x, newms)) queries.
+
+
+Definition pop_reg_position (q:pop_query) (proc:proc_state) :  nat ? :=
+  let queue := proc_registered_locs proc in
+  match q with | Pop pt =>
+                 let pos := find (fun rec => fst rec == pt) queue in
+                 if pos >= size queue then None else Some pos
+  end.
+
+Definition coherent_reg_positions  (ms:machine_state) :=
+  match option_map fst $ slice_pop_requests ms with
+    | Some qs =>
+      unsome_bool $  option_map (@constant _) $ seq_unsome $ map (uncurry pop_reg_position) $ zip qs (ms_procs ms)
+    | None => false
+  end.
+
+Definition apply_pop_regs (ms:machine_state) : machine_state :=
+  match ms with
+    | MBad _ _  => ms
+    | MGood ps fs =>
+      let bad := MBad ( map (fun x=> pair (pair InvalidPopReg None) x) (ms_procs ms))  fs  in
+      if coherent_reg_positions ms then
+        match slice_pop_requests ms with
+          | Some (req::reqs , reduced_ms) =>
+            match seq_unsome
+                    $ map (fun pc=> option_map (fun pos => ps_mod_reg_loc (skip_at pos) pc) $ pop_reg_position req pc)
+                             (ms_procs ms) with
+              | Some ss => MGood ss fs
+              | None => bad
+            end
+          | _ => bad
+        end
+      else bad
+  end.
+
+
+Definition get_to_ms_transform (pid:nat) (q:get_query) (ms:machine_state) : machine_state  :=
+  let bad := MBad (map (pair (pair InvalidGet None)) (ms_procs ms)) $ ms_source ms in
+  match q with
+    | Get t frompid (Goodptr bid offset) offset' (Goodptr bid_to offset_to) size =>
+      match add_n_z offset offset' with
+          | Some offset=>
+            match read_proc_memory ms frompid bid offset size with
+              | Some (t, vals) => match write_proc_memory ms frompid bid_to offset_to vals with
+                                    | Some ms => ms
+                                    | None => bad
+                                  end
+              | None => bad
+            end
+          | None => bad
+      end
+    | _ => bad
+  end.
+
+Definition apply_gets (ms:machine_state) : machine_state :=
+  transformations ms $ flatten $
+                  map (fun p=> map (get_to_ms_transform (proc_id p)) (proc_queue_get p)) (ms_procs ms).
+
+
 Fixpoint interpreter_step (ms: machine_state) : machine_state :=
-  let interpret_proc s : ((error_code * (statement?)) * proc_state) :=
+  let pex_state := prod (prod error_code  (statement?)) proc_state in
+  let interpret_proc s : pex_state :=
       let pid := proc_id s in
       match proc_conts s with
         | nil => ((OK, None), s)
@@ -560,6 +671,7 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
           let err code := ((code, Some cur_statement), s) in
           let loop := ok_with s in
           let skip :=  ok_with $ ps_mod_cont (const stts) s in
+          let eval := iexpr ms pid in
           match cur_statement with
             | Skip => skip
             | Call fname fargs =>
@@ -575,7 +687,7 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
               end
                 
             | Assign w val  =>
-              match iexpr ms pid w, iexpr ms pid val with
+              match eval w, eval val with
                 | Value (Pointer t)  (Goodptr to off), Value vtype v =>                           
                   if vtype == t then
                     match mem_write to off (Value _ v ) s with
@@ -602,13 +714,13 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
               end
 
             | If cond _then _else =>
-              match @is_value_true s $ iexpr ms pid cond with
+              match @is_value_true s $ eval cond with
                 | Some true => ok_with $ ps_mod_cont (const (_then::stts)) s
                 | Some false => ok_with $ ps_mod_cont (const (_else::stts)) s
                 | None => err TypeMismatch
               end
             | While cond body =>
-              match @is_value_true s $ iexpr ms pid cond with
+              match @is_value_true s $ eval cond with
                 | Some true => ok_with $  ps_mod_cont (cons body) s
                 | Some false => ok_with $ ps_mod_cont (const stts) s
                 | None => err TypeMismatch
@@ -625,34 +737,101 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
                                        end
                        end                        
             | BspSync => loop (* wait for sync = error code? *)
-            | BspPushReg x => skip
-            | BspPopReg x => skip
-            | BspGet x x0 x1 => skip 
-            | BspPut x x0 x1 => skip
+            | BspPushReg x sz =>
+              match eval x, eval sz with
+                | Value (Pointer t)  (Goodptr to off),  Value (Int S64) (Posz sz) =>
+                  ok_with $ ps_mod_queue_push (cat [:: Push (AnyPtr t (Goodptr t to off)) sz]) s
+                | _, _ => err TypeMismatch
+              end
+             
+            | BspPopReg x sz => match eval x with
+                | Value (Pointer t)  (Goodptr to off) =>
+                  ok_with $ ps_mod_queue_pop (cat [:: Pop (AnyPtr t (Goodptr t to off)) ]) s
+                | _ => err TypeMismatch
+              end
+             
+            | BspGet pid_from source offset dest size =>
+              match eval pid_from, eval source, eval offset, eval dest, eval size with
+                | Value (Int S64) (Posz pid_from),
+                  Value (Pointer t) ((Goodptr source_base source_offset) as source_ptr),
+                  Value (Int S64) offset,
+                  Value (Pointer u) (Goodptr dest_base dest_offset),
+                  Value (Int S64) size =>
+                  if t == u then
+                    match offset, size with
+                        | Posz offset, Posz size =>
+                  ok_with $ ps_mod_queue_get ( cat [:: Get t pid_from source_ptr offset (Goodptr t dest_base dest_offset) size ] ) s
+                        | _,_ => err PointerOutsideBlock
+                                        end
+                  else
+                    err TypeMismatch
+                | _,_, _,_,_ => err InvalidGet
+              end
+            
+            | BspPut to_pid dest offset source size =>
+              match eval to_pid, eval dest, eval offset, eval source, eval size with
+                | Value (Int S64) (Posz to_pid),
+                  Value (Pointer t_dest) (Goodptr dest_base dest_offset),
+                  Value (Int S64) offset,
+                  Value (Pointer t_source) (Goodptr source_base source_offset),
+                  Value (Int S64) size =>
+                  if t_dest == t_source then
+                    match size, add_n_z dest_offset offset with
+                      | Posz size, Some offset =>
+                        match read_proc_memory ms pid source_base source_offset size with
+                          | Some (read_type, vals) =>
+                            if read_type == t_dest then
+                              ok_with $ ps_mod_queue_put (cat [:: Put t_dest to_pid vals (Goodptr t_dest dest_base dest_offset) size]) s
+                            else
+                              err TypeMismatch
+                          | None => err InvalidPut
+                        end
+                      | _,_ => err InvalidPut
+                    end
+                  else err TypeMismatch
+                | _, _, _, _, _ => err InvalidPut
+              end
           end
       end
   in
+ (* let apply_gets (init:machine_state) (sss: seq proc_state) :machine_state :=
+      let queues := map  sss (fun ps => (proc_id x, proc_queue_get x)) in
+      let get_transformer (write_to_pid:nat) (g:get) (oldms:machine_state) : machine_state :=
+          match g with
+            | Get gt gpid ptr=>
+          write_proc_memory oldms write_to_pid 
+          in
+      (fun procst oldmst => write_proc_memory oldst 
+  in*)
   match ms with
     | MBad _ _ => ms
     | MGood pstates funcs =>
+      let synchronize: machine_state->machine_state :=
+          apply_gets \o apply_push_regs \o apply_pop_regs  in
       let stepped_procs := map interpret_proc pstates in
-      let is_good r := match r with | (OK, _, _) => true | _ => false end in
-      if all is_good stepped_procs then MGood (map snd stepped_procs) funcs else MBad stepped_procs funcs
+      let waiting_sync (r: pex_state) := match r with | ((OK, Some BspSync), _) => true | _ => false end in
+      let running_good r := match r with | ((OK, _), _) => true | _ => false end in
+      let good_next_state := MGood (map snd stepped_procs) funcs in
+      if all waiting_sync stepped_procs then synchronize good_next_state  else
+        if all running_good stepped_procs then good_next_state else MBad stepped_procs funcs
   end
 .
-      
+
+Inductive istep : machine_state -> machine_state -> Prop :=
+| istep_app s s' : interpreter_step s = s' -> istep s s'.
 
 
-Definition init_state_for (s:statement) := Good (stat_ctx_mod stat_init (fun _=> [:: mk_fun 0 "main" nil s 0 ] ) id ) $
+
+(*Definition init_state_for (s:statement) := Good (stat_ctx_mod stat_init (fun _=> [:: mk_fun 0 "main" nil s 0 ] ) id ) $
                                                 mk_dyn_ctx  nil [:: s] .
-                                                
+                          *)                      
 
 
-Fixpoint interpret (steps:nat) (state: prog_state) :=
+Fixpoint interpret (steps:nat) (state: machine_state) : machine_state :=
   match steps with | 0 => state
                 | S steps => match state with
-                               |Bad _ _ _ => state
-                               |Good _ _ => interpret steps $ interpreter_step state
+                               | MBad _ _ => state
+                               | MGood _ _ => interpret steps $ interpreter_step state
                              end
   end.
 

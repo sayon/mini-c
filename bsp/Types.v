@@ -282,3 +282,28 @@ Definition for_eq_carriers {R} (x y: ctype) (def:R)
       subst.
       by rewrite (eqP (Logic.eq_sym Heq)).
 Defined.
+
+Inductive anyptr := |AnyPtr t : ptr t-> anyptr.
+      Theorem anyptr_eq_dec: eq_dec anyptr.
+         rewrite /eq_dec.
+         move=> x y.
+         case x; case y.
+         move=> t p t0 p0.
+         move: (ctype_eq_dec t t0) =>[Ht|Ht].
+         subst.
+         move: (ptr_eq_dec t0 p p0) => [Hp|Hp].
+         subst.
+           by left.
+           right.
+           case.
+           move=> H.
+           depcomp H.
+             by symmetry in H.
+             right.
+             case => H.
+               by symmetry in H.
+       Defined.
+
+      
+       Canonical anyptr_eqMixin := EqMixin ( reflect_from_dec anyptr_eq_dec ).
+       Canonical anyptr_eqType := EqType anyptr anyptr_eqMixin.

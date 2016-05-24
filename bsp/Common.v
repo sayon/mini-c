@@ -71,9 +71,51 @@ Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
 Definition option_nth {T:Type} (s:seq T) (n: nat) := nth None (map (@Some _) s) n.
 
 
+Definition skip_at {T} (n:nat)  (s:seq T) : seq T :=
+  take n s ++ drop n.+1 s.
+
+
 Definition cat_if_some {T} (l r: option ( seq T) ) : option (seq T):=
   match l, r with
     | Some x, Some y => Some ( x ++ y )
     | _, _ => None
     end.
 Notation "x /++/ y" := (cat_if_some x y) (at level 35).
+
+
+
+Theorem option_eq_dec (t:eqType) : eq_dec (option t).
+  move => x y.
+  destruct x, y; try by [left|right].
+  case_eq (s == s0); [left|right]; move /eqP in H.
+    by subst.
+    by case.
+Qed.
+
+Canonical option_eqMixin (t:eqType) := EqMixin (reflect_from_dec (option_eq_dec t)).
+Canonical option_eqType (t:eqType) := EqType (option t) (option_eqMixin t).
+
+
+
+Fixpoint seq_unsome {T} (s: seq (option T)) : option (seq T) :=
+  match s with
+    | (Some x) :: xs => option_map (cons x) $ seq_unsome xs
+    | nil => Some nil
+    | None :: _ => None
+  end.
+
+Definition uncurry {a b c} (f: a -> b -> c) :  (a * b) -> c :=
+  fun x => match x with
+             | (m,n) => f m n
+           end.
+
+Definition unsome_bool x :=
+  match x with
+    | Some true => true
+    | _ => false
+  end.
+Definition extract_some {T} (x:  T ? ? ) : T? :=
+  match x with
+    |Some x => x
+    | None => None
+  end.
