@@ -89,7 +89,29 @@ Record function := mk_fun {
 
 
 Inductive get_query := Get t:  nat-> ptr t-> int -> ptr t -> nat -> get_query .
-Inductive put_query := Put t:  nat-> seq value -> ptr t -> nat -> put_query .
+Inductive put_query := Put t: value -> ptr t -> nat -> put_query .
+
+    Theorem put_query_eq_dec: eq_dec put_query.
+      rewrite /eq_dec.
+      move=> x y; case x; case y.
+      move=> t v p n t0 v0 p0 n0.
+      move: (ctype_eq_dec t0 t) => [Heqt|Heqt];
+        move: (value_eq_dec v0 v) => [Heqv|Heqv];
+        move: (nat_eq_dec n0 n) => [Heqn|Heqn]; subst; try
+      move: (ptr_eq_dec _ p0 p) => [Heqp|Heqp]; try by [right;case].
+      subst; by left.
+      right.
+      case.
+      move=> H.
+      by depcomp H.
+    Qed.
+    Definition put_query_eqP := reflect_from_dec put_query_eq_dec.
+    
+    Canonical put_query_eqMixin := EqMixin put_query_eqP.
+    Canonical put_query_eqType := EqType put_query put_query_eqMixin.
+
+  
+
 Inductive push_query := Push: anyptr -> nat -> push_query.
 Inductive pop_query := Pop: anyptr -> pop_query.
 
@@ -98,7 +120,7 @@ Record proc_state := mk_proc_state {
                          proc_id : nat;
                          proc_symbols : seq (seq var_descr);
                          proc_queue_get: seq get_query;
-                         proc_queue_put: seq put_query;
+                         proc_queue_put: seq ( seq put_query );
                          proc_queue_pop_reg: seq pop_query;
                          proc_queue_push_reg: seq push_query;
                          proc_memory: seq block;
@@ -164,10 +186,11 @@ Canonical error_code_eqType := EqType error_code error_code_eqMixin.
 
 Inductive machine_state :=
 | MGood: seq proc_state -> seq function -> machine_state
-| MBad:  seq ((error_code * option statement) * proc_state) -> seq function -> machine_state.
+| MBad:  seq ((error_code * option statement) * proc_state) -> seq function -> machine_state
+| MNeedSync: seq( seq (seq put_query) )-> seq proc_state -> seq function -> machine_state.
 
-Definition ms_source s := match s with | MGood _ f | MBad  _  f => f end.
-Definition ms_procs s := match s with | MGood p _ => p | MBad  p _ => map snd p end.
+Definition ms_source s := match s with | MGood _ f | MBad  _  f | MNeedSync _ _ f => f end.
+Definition ms_procs s := match s with | MGood p _ | MNeedSync _ p _ => p | MBad  p _ => map snd p end.
 
 Definition proc_state_empty:= @nil (seq var_descr).
 
@@ -240,7 +263,7 @@ Definition dereference (ps: proc_state) (v:value) : value :=
 Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
   match ms with
     | MBad  _ _ => Error
-
+    | MNeedSync _ _ _ => Error
     | MGood procs _ => 
       match option_nth procs pid with
         | None => Error
@@ -334,11 +357,14 @@ Definition block_mod (b: block) (idx: nat) (e: value) : block? :=
                                (set_nth Error (contents b) idx e)
             | Error => None
         end.
-*)
+ *)
+
 Definition ex_block : block := mk_block Stack 0 64 nil Int64 (fill_values 8 Garbage).
 Eval compute in block_mod_cont (const $ [:: Value Int64 3]) ex_block.
 
 Definition ErrorBlock := mk_block Data 0 0 nil ErrorType [::].
+
+(* FIXME maybe we should implement type changes ? *)
 
 Definition can_write (b:block) (i:nat) (v:value) : error_code :=
   match option_nth (contents b) i, v with
@@ -504,11 +530,6 @@ Definition epilogue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq
   end.*)
 
 
-Definition states_folder (ms:machine_state) (proc_step_result : (error_code * (statement?) * proc_state)) :=
-  match ms with
-    | MBad  _ _ => ms
-    | MGood states funs => ms
-  end.
 Definition apply_writes  (v:value) (s:proc_state) (vars: seq var_descr) :=
   let fix process ids st :=
       match ids with
@@ -544,44 +565,47 @@ Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=
   end.
 
 Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
-match ms with
-  | MGood  pss fs  =>
-    match option_nth pss pid with
-      | None => None
-      | Some ps => match option_nth (proc_memory ps) bid with
-                     | Some bl => Some (el_type bl, take size (drop offset (contents bl)))
-                     | None => None
-                   end
-    end
-  | MBad _ _ => None
-end.
+  match ms with
+    | MNeedSync _ pss fs 
+    | MGood  pss fs  =>
+      match option_nth pss pid with
+        | None => None
+        | Some ps => match option_nth (proc_memory ps) bid with
+                       | Some bl => Some (el_type bl, take size (drop offset (contents bl)))
+                       | None => None
+                     end
+      end
+    | MBad _ _ => None
+  end.
 
 Fixpoint write_proc_memory (ms:machine_state) (pid:nat) (bid offset: nat) (vals: seq value) : machine_state? :=
-match ms with
-  | MGood  pss fs  =>
-    match option_nth pss pid, vals  with
-      | None,_ => None
-      | Some ps, v::vs =>
-        match mem_write bid offset v ps with
-          | (OK, news) => let newms := MGood (set_nth ps pss offset news) fs in
-                          write_proc_memory newms pid bid (offset.+1) vs
-          | _ => None
-        end
-      | _, nil => Some ms
-    end
-  | MBad _ _ => None
-end.
+  match ms with
+    | MNeedSync _ pss fs
+    | MGood  pss fs  =>
+      match option_nth pss pid, vals  with
+        | None,_ => None
+        | Some ps, v::vs =>
+          match mem_write bid offset v ps with
+            | (OK, news) => let newms := MGood (set_nth ps pss offset news) fs in
+                            write_proc_memory newms pid bid (offset.+1) vs
+            | _ => None
+          end
+        | _, nil => Some ms
+      end
+    | MBad _ _ => None
+  end.
 
 Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
   foldl (fun x f=> f x) init ts.
 
 Definition ms_mod_proc_all (f:proc_state->proc_state) (ms:machine_state) :=
   match ms with
+    | MNeedSync q ps fs => MNeedSync q (map f ps) fs 
     | MGood ps fs  => MGood (map f ps) fs
     | MBad _ _ =>  ms
   end.
   
-Definition ms_mod_proc (pid:nat) (f:proc_state->proc_state) :=
+Definition ms_mod_proc (pid:nat) (f:proc_state->proc_state) : machine_state->machine_state :=
   ms_mod_proc_all (fun p=> if proc_id p == pid then f p else p).
 
 Definition push_reg_to_p_transform (p:push_query): proc_state -> proc_state :=
@@ -620,6 +644,7 @@ Definition coherent_reg_positions  (ms:machine_state) :=
 Definition apply_pop_regs (ms:machine_state) : machine_state :=
   match ms with
     | MBad _ _  => ms
+    | MNeedSync _ _ _  => ms
     | MGood ps fs =>
       let bad := MBad ( map (fun x=> pair (pair InvalidPopReg None) x) (ms_procs ms))  fs  in
       if coherent_reg_positions ms then
@@ -659,6 +684,82 @@ Definition apply_gets (ms:machine_state) : machine_state :=
   transformations ms $ flatten $
                   map (fun p=> map (get_to_ms_transform (proc_id p)) (proc_queue_get p)) (ms_procs ms).
 
+
+Definition nat_seq (n:nat) : seq nat :=
+  let fix f k := match k with | k.+1 => (k.+1) :: f k | _ => [::0] end in
+  rev $ f n.
+Definition enumerate {T} (s:seq T) : seq (nat * T) :=
+  zip (nat_seq (size s)) s.
+
+
+
+Definition vals_to_put (t:ctype) (startptr: ptr t) (offset:nat) (vvs: seq value) : seq put_query :=
+  let trans p := match p with | (i, v) =>  Put t v startptr (offset + i) end in
+  map trans $ enumerate vvs.
+
+Definition mod_at {T} (def:T) (i:nat) (mod:T->T)  (s:seq T) := set_nth def s i (mod 
+  match option_nth s i with
+    | Some el => el
+    | None => def
+  end).
+
+Compute cat [::1] [::2].
+
+Definition add_put_queries
+           (to:nat)
+           (t:ctype)
+           (startptr: ptr t)
+           (offset:nat)
+           (vvs:seq value): proc_state -> proc_state :=
+  ps_mod_queue_put $ mod_at nil to $ cat (vals_to_put t startptr offset vvs).
+ 
+    
+
+Definition puts_for_pid (pid:nat) (ms:machine_state) :seq ( seq put_query ):=
+  let allqueues := (map proc_queue_put (ms_procs ms)) in
+  match seq_unsome $ map ((flip option_nth) pid) allqueues with
+    | Some puts_into_pid =>  puts_into_pid 
+    | None => nil
+  end.
+
+Definition proc_count (ms:machine_state) : nat := size $ ms_procs ms.
+
+
+Definition has_puts_conflicts (ms:machine_state) : bool :=
+  let proc_affected (i:nat) := map undup (puts_for_pid i ms) in
+  let proc_good i := uniq $ flatten (proc_affected i) in
+  all proc_good $ nat_seq (proc_count ms).
+
+Definition all_puts (ms:machine_state) : seq (seq (seq put_query) ):=
+  map ((flip puts_for_pid) ms) (nat_seq (proc_count ms)).
+
+Definition put_query_to_ms_transform (pid:nat) (p:put_query) (ms:machine_state): machine_state? :=
+match p with
+  | Put t v (Goodptr bid offset)   off => write_proc_memory ms pid bid offset [:: v]
+  | _ => None
+end.
+
+Definition option_bind {T U} (f:T-> U?) (x:T?) :=
+  match x with
+    | Some x => f x
+    | None => None
+  end.
+                                                      
+
+Definition apply_puts_for_id (pid:nat) (ms:machine_state) : machine_state :=
+  let  puts := flatten $ puts_for_pid pid ms in
+  let transforms := map option_bind $ map (put_query_to_ms_transform pid) puts in
+  match transformations (Some ms) transforms with
+    | Some ms => ms
+    | None => MBad ( map (pair (pair InvalidPut None))  (ms_procs ms)) (ms_source ms)
+  end.
+         
+Definition clear_puts (ms:machine_state) : machine_state :=
+  ms_mod_proc_all  (ps_mod_queue_put (const nil)) ms.
+
+Definition apply_puts (ms:machine_state) : machine_state :=
+  if has_puts_conflicts ms then MNeedSync (all_puts ms) (ms_procs (clear_puts ms)) (ms_source ms) else
+  clear_puts $ transformations ms $ map apply_puts_for_id $ nat_seq $ size $ ms_procs ms.
 
 Fixpoint interpreter_step (ms: machine_state) : machine_state :=
   let pex_state := prod (prod error_code  (statement?)) proc_state in
@@ -781,7 +882,9 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
                         match read_proc_memory ms pid source_base source_offset size with
                           | Some (read_type, vals) =>
                             if read_type == t_dest then
-                              ok_with $ ps_mod_queue_put (cat [:: Put t_dest to_pid vals (Goodptr t_dest dest_base dest_offset) size]) s
+                              ok_with $
+(add_put_queries to_pid t_dest (Goodptr t_dest dest_base dest_offset) offset  vals ) s
+                                     
                             else
                               err TypeMismatch
                           | None => err InvalidPut
@@ -794,25 +897,18 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
           end
       end
   in
- (* let apply_gets (init:machine_state) (sss: seq proc_state) :machine_state :=
-      let queues := map  sss (fun ps => (proc_id x, proc_queue_get x)) in
-      let get_transformer (write_to_pid:nat) (g:get) (oldms:machine_state) : machine_state :=
-          match g with
-            | Get gt gpid ptr=>
-          write_proc_memory oldms write_to_pid 
-          in
-      (fun procst oldmst => write_proc_memory oldst 
-  in*)
   match ms with
+    | MNeedSync _ _ _ => ms
     | MBad _ _ => ms
     | MGood pstates funcs =>
-      let synchronize: machine_state->machine_state :=
+      let synchronize: machine_state->machine_state := apply_puts \o
           apply_gets \o apply_push_regs \o apply_pop_regs  in
       let stepped_procs := map interpret_proc pstates in
       let waiting_sync (r: pex_state) := match r with | ((OK, Some BspSync), _) => true | _ => false end in
       let running_good r := match r with | ((OK, _), _) => true | _ => false end in
       let good_next_state := MGood (map snd stepped_procs) funcs in
-      if all waiting_sync stepped_procs then synchronize good_next_state  else
+      if all waiting_sync stepped_procs then
+        synchronize good_next_state  else
         if all running_good stepped_procs then good_next_state else MBad stepped_procs funcs
   end
 .
