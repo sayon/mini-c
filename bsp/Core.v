@@ -913,8 +913,26 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
   end
 .
 
+Definition option_nth3 {T:eqType} (x y z:nat) (s:seq ( seq ( seq T ) ) ) : T? :=
+  match option_nth s x with
+    | Some q => match option_nth q y with
+                  | Some w => option_nth w z
+                  |None => None
+                end
+    |None=>None
+  end
+.
+
+
 Inductive istep : machine_state -> machine_state -> Prop :=
-| istep_app s s' : interpreter_step s = s' -> istep s s'.
+| istep_good s s' ps fs : s' = MGood ps fs -> interpreter_step s = s' -> istep s s'
+| istep_sync_ok s s' ps fs: s = MNeedSync nil ps fs -> s' = MGood ps fs -> istep s s'
+| istep_sync_conf s s' qp ps fs p newq x y z:
+    s = MNeedSync qp ps fs ->
+    option_nth3 x y z qp = Some p ->
+    newq = mod_at nil x (mod_at nil y (skip_at z )) qp ->
+    s' = MNeedSync newq ps fs ->
+    istep s s'.
 
 
 
