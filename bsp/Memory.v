@@ -42,3 +42,8 @@ Definition block_eqP := reflect_from_dec (block_eq_dec).
 
 Canonical block_eqMixin := EqMixin block_eqP.
 Canonical block_eqType := EqType block block_eqMixin.
+
+Definition block_mod_cont f b :=
+  match b with
+    | mk_block q w e r t C => mk_block q w e r t (f C)
+  end.

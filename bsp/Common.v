@@ -70,16 +70,29 @@ Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
 
 Definition option_nth {T:Type} (s:seq T) (n: nat) := nth None (map (@Some _) s) n.
 
+Definition enumerate {T} (s:seq T) : seq (nat * T) :=
+  zip (iota 0 (size s)) s.
+
+Definition mod_at {T} (def:T) (i:nat) (mod:T->T)  (s:seq T) := set_nth def s i (mod 
+  match option_nth s i with
+    | Some el => el
+    | None => def
+  end).
+
+
 
 Definition skip_at {T} (n:nat)  (s:seq T) : seq T :=
   take n s ++ drop n.+1 s.
 
+Definition slice {T} (x s: nat) (sq : seq T) :seq T :=
+  take s $ drop x sq.
 
 Definition cat_if_some {T} (l r: option ( seq T) ) : option (seq T):=
   match l, r with
     | Some x, Some y => Some ( x ++ y )
     | _, _ => None
     end.
+
 Notation "x /++/ y" := (cat_if_some x y) (at level 35).
 
 
@@ -114,8 +127,25 @@ Definition unsome_bool x :=
     | Some true => true
     | _ => false
   end.
+
+Definition is_some {T} (x:option T) : bool :=
+  match x with | Some _ => true | _ => false end.
+
 Definition extract_some {T} (x:  T ? ? ) : T? :=
   match x with
     |Some x => x
     | None => None
+  end.
+
+
+Fixpoint  fill {T} (v: T)  (sz: nat)  : seq T :=
+  match sz with | n .+1 => v :: (fill v n) | 0 => [::] end.
+
+
+
+
+Definition add_n_z (x:nat) (y:int) :=
+  match intZmod.addz x y with
+    | Negz r => None
+    | Posz r => Some r
   end.

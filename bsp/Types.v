@@ -307,3 +307,11 @@ Inductive anyptr := |AnyPtr t : ptr t-> anyptr.
       
        Canonical anyptr_eqMixin := EqMixin ( reflect_from_dec anyptr_eq_dec ).
        Canonical anyptr_eqType := EqType anyptr anyptr_eqMixin.
+
+
+       
+Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=
+  match p with
+    | Nullptr => None
+    | Goodptr b o => @Some _ $ Goodptr t b $ add_n_z o z
+  end.

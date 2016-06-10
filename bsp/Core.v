@@ -6,201 +6,8 @@ Require Import Program.
 Require Import UtilString.
 Require Import ProofIrrelevance.
 Import intZmod.    
-Require Import Common Types Memory Extraction.
+Require Import Common Syntax Types State Memory.
 
-
-       
-Record var_descr := declare_var { var_name: string; var_type: ctype; location: nat }.
-       Definition var_descr_beq (x y: var_descr) : bool :=
-         (var_name x == var_name y)  && (var_type x == var_type y) && (location x == location y).
-       Theorem var_descr_eq_dec: eq_dec var_descr.
-         rewrite /eq_dec.
-         decide equality.
-         decide equality.
-         apply ctype_eq_dec.
-         apply string_eq_dec.
-       Qed.
-
-       Definition var_descr_eqP := reflect_from_dec var_descr_eq_dec.
-       
-       Canonical var_descr_eqMixin := EqMixin var_descr_eqP.
-       Canonical var_descr_eqType := EqType var_descr var_descr_eqMixin.
-
-  
-Inductive binop : Set := | Add | Sub | Mul | Div | LAnd | LOr | Eq .
-       Scheme Equality for binop.
-       Definition binop_eqP := reflect_from_dec binop_eq_dec.
-       Canonical binop_eqMixin := EqMixin binop_eqP.
-       Canonical binop_eqType := EqType binop binop_eqMixin.
-       
-Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asterisk .
-       Definition unop_beq (x y : unop) : bool :=
-         match x, y with
-           | Neg, Neg  |Invert, Invert | Not, Not | Amp, Amp | Asterisk, Asterisk => true
-           | Convert t1, Convert t2 => t1 == t2
-           | _, _ => false
-         end.
-
-       Lemma unop_eqP: Equality.axiom unop_beq.
-         move=> x y.
-         case Heq: (unop_beq _ _); move: Heq. 
-         case x; case y =>//=; try by constructor.
-         move=> t0 t1. by move /eqP =>->; constructor.
-         case x; case y => //=; try by constructor.
-         move=> t0 t1  /eqP => Hneq. constructor. by case.
-       Qed.
-       Canonical unop_eqMixin := EqMixin unop_eqP.
-       Canonical unop_eqType := EqType unop unop_eqMixin.
-       Definition unop_eq_dec := dec_from_reflect unop_eqP.
-
-Inductive expr :=
-       | Lit   (t:ctype) (_:coq_type(t))
-       | EDeallocated (t:ctype)
-       | EGarbage (t:ctype)
-       | Var   (_:string)
-       | Binop (_:binop) (_ _: expr)
-       | Unop  (_:unop)  (_: expr)
-       | BspNProc
-       | BspPid.
-
-Inductive statement :=
-       | Skip
-       | Call : string -> seq expr -> statement (* return values do not exist *)
-       | Assign: expr -> expr -> statement
-       | Alloc: storage -> ctype -> option string -> nat -> statement
-       | If: expr -> statement -> statement -> statement
-       | While: expr -> statement -> statement
-       | CodeBlock: seq statement -> statement
-       | Debug
-       | Enter
-       | Leave
-       | BspSync
-       | BspPushReg: expr-> expr-> statement (* ptr and size *)
-       | BspPopReg: expr-> expr-> statement (* ptr and size *)
-       | BspGet: expr -> expr-> expr-> expr -> expr-> statement (* pid source offset dest size *)
-       | BspPut: expr -> expr-> expr-> expr -> expr -> statement. (* pid dest offset source size *)
-
-Record function := mk_fun {
-                       fun_id: nat;
-                       fun_name: string;
-                       args: seq (string * ctype);
-                       body: statement;
-                       fun_location: nat}. (* all functions are void; if they return smth it is written by pointer passed as arg *)
-
-
-Inductive get_query := Get t:  nat-> ptr t-> int -> ptr t -> nat -> get_query .
-Inductive put_query := Put t: value -> ptr t -> nat -> put_query .
-
-    Theorem put_query_eq_dec: eq_dec put_query.
-      rewrite /eq_dec.
-      move=> x y; case x; case y.
-      move=> t v p n t0 v0 p0 n0.
-      move: (ctype_eq_dec t0 t) => [Heqt|Heqt];
-        move: (value_eq_dec v0 v) => [Heqv|Heqv];
-        move: (nat_eq_dec n0 n) => [Heqn|Heqn]; subst; try
-      move: (ptr_eq_dec _ p0 p) => [Heqp|Heqp]; try by [right;case].
-      subst; by left.
-      right.
-      case.
-      move=> H.
-      by depcomp H.
-    Qed.
-    Definition put_query_eqP := reflect_from_dec put_query_eq_dec.
-    
-    Canonical put_query_eqMixin := EqMixin put_query_eqP.
-    Canonical put_query_eqType := EqType put_query put_query_eqMixin.
-
-  
-
-Inductive push_query := Push: anyptr -> nat -> push_query.
-Inductive pop_query := Pop: anyptr -> pop_query.
-
-
-Record proc_state := mk_proc_state {
-                         proc_id : nat;
-                         proc_symbols : seq (seq var_descr);
-                         proc_queue_get: seq get_query;
-                         proc_queue_put: seq ( seq put_query );
-                         proc_queue_pop_reg: seq pop_query;
-                         proc_queue_push_reg: seq push_query;
-                         proc_memory: seq block;
-                         proc_conts: seq statement;
-                         proc_registered_locs: seq ( anyptr * nat )                         
-                       }.
-Definition ps_mod_f
-           mod_syms    
-           mod_queue_get 
-           mod_queue_put 
-           mod_queue_pop 
-           mod_queue_push
-           mod_memory    
-           mod_conts     
-           mod_reg_locs  
-           (ps: proc_state) : proc_state :=
-  mk_proc_state
-    (proc_id ps)
-    (mod_syms ps)
-    (mod_queue_get ps)
-    (mod_queue_put ps)
-    (mod_queue_pop ps)
-    (mod_queue_push ps)
-    (mod_memory ps)
-    (mod_conts ps)
-    (mod_reg_locs ps)
-.
-
-Definition ps_mod
-           mod_syms    
-           mod_queue_get 
-           mod_queue_put 
-           mod_queue_pop 
-           mod_queue_push
-           mod_memory  
-           mod_conts   
-           mod_reg_locs : proc_state -> proc_state :=
-  ps_mod_f
-    (mod_syms \o proc_symbols)
-    (mod_queue_get \o proc_queue_get)
-    (mod_queue_put \o proc_queue_put)
-    (mod_queue_pop \o proc_queue_pop_reg)
-    (mod_queue_push \o proc_queue_push_reg)
-    (mod_memory \o proc_memory)
-    (mod_conts \o proc_conts)
-    (mod_reg_locs \o proc_registered_locs).
-
-Definition ps_mod_syms       f := ps_mod f  id id id id id id id.
-Definition ps_mod_queue_get  f := ps_mod id f  id id id id id id.
-Definition ps_mod_queue_put  f := ps_mod id id f  id id id id id.
-Definition ps_mod_queue_pop  f := ps_mod id id id f  id id id id.
-Definition ps_mod_queue_push f := ps_mod id id id id f  id id id.
-Definition ps_mod_mem        f := ps_mod id id id id id f  id id.
-Definition ps_mod_cont       f := ps_mod id id id id id id f  id.
-Definition ps_mod_reg_loc    f := ps_mod id id id id id id id f .
-
-Inductive error_code := | OK | BadPointer | ModNonExistingBlock | PointerOutsideBlock| BadWriteLocation | TypeMismatch | WritingGarbage | NonExistingSymbol | GenericError | InvalidPopReg | InvalidPushReg | InvalidGet | InvalidPut.
-Scheme Equality for error_code.
-Canonical error_code_eqMixin := EqMixin (reflect_from_dec error_code_eq_dec).
-Canonical error_code_eqType := EqType error_code error_code_eqMixin.
-
-
-
-Inductive machine_state :=
-| MGood: seq proc_state -> seq function -> machine_state
-| MBad:  seq ((error_code * option statement) * proc_state) -> seq function -> machine_state
-| MNeedSync: seq( seq (seq put_query) )-> seq proc_state -> seq function -> machine_state.
-
-Definition ms_source s := match s with | MGood _ f | MBad  _  f | MNeedSync _ _ f => f end.
-Definition ms_procs s := match s with | MGood p _ | MNeedSync _ p _ => p | MBad  p _ => map snd p end.
-
-Definition proc_state_empty:= @nil (seq var_descr).
-
-Definition perform_enter (ps: proc_state) : proc_state := ps_mod_syms (cons nil) ps.
-
-Definition get_var (ps:proc_state) (name:string) : option var_descr :=
-  option_find (fun p: var_descr => var_name p == name) (flatten (proc_symbols ps)).
-
-Definition get_fun (s:machine_state) (name:string) : option function :=
-         option_find (fun p: function => fun_name p == name) $ ms_source s.
 
 Fixpoint type_solver {ps:proc_state}  (e: expr) : ctype:=
   let slv := @type_solver ps  in
@@ -221,15 +28,29 @@ Fixpoint type_solver {ps:proc_state}  (e: expr) : ctype:=
     | BspNProc => Int64
     | BspPid => Int64
   end.
+Definition div_sgn x y := match x,y with
+                            | Posz _, Posz _
+                            | Negz _, Negz _ => Posz 1
+                            | _,_ => Negz 1
+                          end.
+                                                            
 
+Definition idiv x y := intRing.mulz (div_sgn x y)
+                                    match x,y with
+                                      | Posz x, Posz y 
+                                      | Negz x, Negz y
+                                      | Posz x, Negz y
+                                      | Negz x, Posz y => fst (div.edivn x y)
+                                    end.
 
 Definition binop_interp (t:ctype) (op: binop) : int -> int -> value :=
   match t with
     | Int num => match op with
                    | Add => fun x y=> Value (Int num) $ addz x y
                    | Sub => fun x y=> Value (Int num) $ addz x (oppz y)
-                   | Mul => fun x y => Value (Int num) $ intRing.mulz x y
+                   | Mul => fun x y=> Value (Int num) $ intRing.mulz x y
                    | Eq  => fun x y=> Value (Int num) $ Posz $ if x == y then 1 else 0
+                   | Div => fun x y=> Value (Int num) $ idiv x y
                    | _ => fun _ _ => Error
                  end
     | _ => fun _ _ => Error
@@ -313,106 +134,13 @@ Definition alloc_block (ps: proc_state) (b:block) : proc_state := ps_mod_mem (ca
 
 Definition next_block_id : proc_state -> nat := size \o proc_memory.
 
-Fixpoint  fill_values (sz: nat) (v:value) : seq value :=
-  match sz with | n .+1 => v :: (fill_values n v) | 0 => [::] end.
-
-Definition bind_var (v:var_descr) (b_id:nat) :=
-  ps_mod_syms (fun vs => match vs with
-                           | nil => cons [::v] nil
-                           | cons x xs => cons (cons v x) xs
-                         end).
 
 
+Definition ex_block : block := mk_block Stack 0 64 nil Int64 (fill Garbage 8).
 
-Definition block_mod_cont f b :=
-  mk_block
-    (region b)
-    (block_id b)
-    (block_size b)
-    (shared_with b)
-    (el_type b)
-    (f (contents b)).
-(*
-Definition block_mod (b: block) (idx: nat) (e: value) : block? :=
-        if idx * ( SizeOf (el_type b)) >= block_size b then None else
-          match e with
-            | Value t v =>
-              match el_type b == t with
-                | true => Some $ mk_block
-                               (region b)
-                               (block_id b)
-                               (block_size b)
-                               (shared_with b)
-                               (el_type b)
-                               (set_nth Error (contents b) idx (Value t v))
-                | false => None
-              end
-            | Garbage as e
-            | Deallocated as e=>  Some $ mk_block
-                               (region b)
-                               (block_id b)
-                               (block_size b)
-                               (shared_with b)
-                               (el_type b)
-                               (set_nth Error (contents b) idx e)
-            | Error => None
-        end.
- *)
-
-Definition ex_block : block := mk_block Stack 0 64 nil Int64 (fill_values 8 Garbage).
-Eval compute in block_mod_cont (const $ [:: Value Int64 3]) ex_block.
-
-Definition ErrorBlock := mk_block Data 0 0 nil ErrorType [::].
 
 (* FIXME maybe we should implement type changes ? *)
 
-Definition can_write (b:block) (i:nat) (v:value) : error_code :=
-  match option_nth (contents b) i, v with
-    | Some (Value bt bv), (Value t v) => if (el_type b == t) && (bt == t) then OK else TypeMismatch
-    | Some Garbage, Value t v => if el_type b == t then OK else TypeMismatch
-    | Some Deallocated, _ => BadWriteLocation
-    | Some _, Deallocated => WritingGarbage
-    | Some _, Error => GenericError
-    | Some _, Garbage => WritingGarbage
-    | Some Error, _ => GenericError
-    | None, _ => BadWriteLocation
-  end.
-
-Definition mem_write  (bid:nat) (pos: nat) (val:value) (ps: proc_state): (error_code * proc_state) :=
-  let m := proc_memory ps in
-  let oldblock := option_nth m bid in
-  match oldblock with
-    | Some oldblock =>
-      if can_write oldblock pos val == OK then
-        let newblockcnt := set_nth val (contents oldblock) pos val in
-        let newblock := block_mod_cont (const newblockcnt) oldblock in
-        let newmem := set_nth ErrorBlock m bid newblock in
-        (OK, ps_mod_mem (const newmem) ps)
-      else (can_write oldblock pos val, ps)
-    | None => (ModNonExistingBlock, ps)
-  end.
-
-Definition mem_write_block (bid:nat) (val:value) (ps: proc_state): (error_code * proc_state) :=
-  let lastidx := option_map block_size $ option_nth (proc_memory ps) bid in
-  let fix process idx s :=
-      match idx with
-        | 0 => mem_write bid idx val s
-        | S i => match mem_write bid idx val s with
-                   | (OK, ns) => process i ns
-                   | o => o
-                 end
-      end in
-  match lastidx with
-    | Some lastidx => process lastidx ps
-    | None => (GenericError, ps)
-  end.
-
-
-Definition add_var (vd: var_descr) := ps_mod_syms
-                                        (fun s=> match s with
-                                                   | nil => cons [::vd] nil
-                                                   | cons x xs => cons (cons vd x) xs
-                                                 end).
 
 Definition is_value_true {ps:proc_state} (v: value) : option bool:=
   match v with
@@ -422,86 +150,7 @@ Definition is_value_true {ps:proc_state} (v: value) : option bool:=
     | _ => None 
   end.
   
-
-Theorem carrier_eq_dec: forall t, eq_dec (coq_type t).
-  rewrite /eq_dec.
-  case; try by apply unit_eq_dec.
-  - case; apply int_eq_dec.
-  - apply ptr_eq_dec.
-  - move=> *. apply (seq_eq_dec _ nat_eq_dec). 
-Qed.
-
-
-
-     Theorem expr_eq_dec : eq_dec expr.
-       have Hlst: forall (A:Type) (a:A) l,  a :: l = l -> False. by  move=> A a; elim =>//=; move=> a0 l0 IH [] =><-. 
-       rewrite /eq_dec.
-       fix 1.
-       move => x y.
-       case x; case y; try by right.
-       - move => t c t0 c0.
-         case Ht:(t == t0).
-         + move /eqP in Ht; subst.
-           move: (carrier_eq_dec t0 c0 c).
-           case; [by left; subst
-                 | by right; move =>[]=> H; depcomp H].
-         + by move /eqP in Ht; right; case; move=> He; symmetry in He.
-       - move=> t0 t; move: (ctype_eq_dec t0 t) =>[].
-         by move => ->; left.
-         by move=> H; right; case=> H'; symmetry in H'. 
-       - move=> t0 t; move: (ctype_eq_dec t0 t) =>[].
-           by move => ->; left. 
-           by move=> H; right; case=> H'; symmetry in H'.
-       - by move=> s0 s; move: (string_eq_dec s s0) => []; by[left; subst| right; case]. 
-       - move=> op2 x2 y2 op1 x1 y1.
-         move: (binop_eq_dec op1 op2) => [Hop|Hop]; 
-           move: (expr_eq_dec x1 x2) => [Hx|Hx];
-           move: (expr_eq_dec y1 y2) => [Hy|Hy]; try by right;case.
-           by rewrite Hx Hy Hop; left. 
-       - move=> op1 x1  op2 x2.
-         move:(expr_eq_dec x2 x1) => [Hx|Hx]; move:(unop_eq_dec op2 op1) => [Hop|Hop]; subst; try by [right;case].
-           by left.
-       - by left.
-       - by left.
-     Qed. 
-
-     Definition expr_eqP := reflect_from_dec expr_eq_dec.
-     
-     Canonical expr_eqMixin := EqMixin expr_eqP.
-     Canonical expr_eqType := EqType expr expr_eqMixin.
-       
-     Theorem statement_eq_dec: eq_dec statement.
-       rewrite /eq_dec.   
-       fix 1.
-       have option_eq_dec t: eq_dec t ->  eq_dec (option t). by rewrite /eq_dec =>H; decide equality.
-       decide equality; try apply expr_eq_dec.
-       apply ( seq_eq_dec _ expr_eq_dec).
-       apply string_eq_dec.
-       apply nat_eq_dec.
-       apply (option_eq_dec _ string_eq_dec).
-       apply ctype_eq_dec.
-       apply storage_eq_dec.
-       elim: l l0.
-         by case; [left | right].
-         move=> a l H l0.
-         case l0. by right.
-         move=> s l1.
-         move: (H l1) => [H0|H0]; move: (statement_eq_dec a s) => [H1|H1]; subst; 
-                                                                  try by [left| right; case].
-       Defined.
-
-     Definition statement_eqP := reflect_from_dec statement_eq_dec.
-     
-     Canonical statement_eqMixin := EqMixin statement_eqP.
-     Canonical statement_eqType := EqType statement statement_eqMixin.
-
-     (* Todo: make the lists potentially infinite? *)
-
-     (* Add: 
-* Check if expression types are corresponding to arguments;
-* Throw in assignments 
-*)
-     
+ 
 
 Definition LitFromExpr (ms: machine_state) (pid:nat) (e:expr): expr ? :=
   match iexpr ms pid e  with
@@ -510,7 +159,7 @@ Definition LitFromExpr (ms: machine_state) (pid:nat) (e:expr): expr ? :=
     | Deallocate => None 
   end .
 
-
+ 
 Definition prologue_arg (ms: machine_state) (pid:nat) (name:string) (t:ctype) (e:expr) :=
   option_map (fun l =>  [:: Alloc Stack t (Some name) 1; Assign (Var name) l] ) $ LitFromExpr ms pid e.
 
@@ -523,12 +172,7 @@ Definition prologue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq
 
 Definition epilogue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq expr) : option ( seq statement)  := Some [:: Leave].
 
-(*Definition fun_by_address {t} (p: ptr t) (stat:static_ctx) (dyn:dynamic_ctx) : function? :=
-  match p with 
-    | Goodptr b o => option_find (fun f=> fun_location f == b) $ functions stat
-    | _ => None
-  end.*)
-
+(* add tests *)
 
 Definition apply_writes  (v:value) (s:proc_state) (vars: seq var_descr) :=
   let fix process ids st :=
@@ -543,26 +187,16 @@ Definition apply_writes  (v:value) (s:proc_state) (vars: seq var_descr) :=
   in
   process (map location vars) s.
 
-Definition init_value (t:ctype) (l: storage) : value :=
+
+Fixpoint init_value (t:ctype) (l: storage) : value :=
   match l with
     | Heap 
     | Stack
-    | Text => Garbage
-    | ReadOnlyData => Garbage (*FIXME: Should be 0*)
-    | Data =>  Garbage (*FIXME: Should be 0*)
+    | Text
+    | ReadOnlyData  
+    | Data => Garbage
   end.
 
-Definition add_n_z (x:nat) (y:int) :=
-  match addz x y with
-    | Negz r => None
-    | Posz r => Some r
-  end.
-
-Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=
-  match p with
-    | Nullptr => None
-    | Goodptr b o => Some $ Goodptr t b $ add_n_z o z
-  end.
 
 Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
   match ms with
@@ -641,11 +275,14 @@ Definition coherent_reg_positions  (ms:machine_state) :=
     | None => false
   end.
 
+Definition has_to_pop (ms:machine_state) : bool :=
+  has (fun x => size (proc_queue_pop_reg x) != 0) (ms_procs ms).
+
 Definition apply_pop_regs (ms:machine_state) : machine_state :=
   match ms with
     | MBad _ _  => ms
     | MNeedSync _ _ _  => ms
-    | MGood ps fs =>
+    | MGood ps fs => if all (fun x=> size (proc_queue_pop_reg x) == 0) (ms_procs ms) then ms else
       let bad := MBad ( map (fun x=> pair (pair InvalidPopReg None) x) (ms_procs ms))  fs  in
       if coherent_reg_positions ms then
         match slice_pop_requests ms with
@@ -684,26 +321,10 @@ Definition apply_gets (ms:machine_state) : machine_state :=
   transformations ms $ flatten $
                   map (fun p=> map (get_to_ms_transform (proc_id p)) (proc_queue_get p)) (ms_procs ms).
 
-
-Definition nat_seq (n:nat) : seq nat :=
-  let fix f k := match k with | k.+1 => (k.+1) :: f k | _ => [::0] end in
-  rev $ f n.
-Definition enumerate {T} (s:seq T) : seq (nat * T) :=
-  zip (nat_seq (size s)) s.
-
-
-
 Definition vals_to_put (t:ctype) (startptr: ptr t) (offset:nat) (vvs: seq value) : seq put_query :=
   let trans p := match p with | (i, v) =>  Put t v startptr (offset + i) end in
   map trans $ enumerate vvs.
 
-Definition mod_at {T} (def:T) (i:nat) (mod:T->T)  (s:seq T) := set_nth def s i (mod 
-  match option_nth s i with
-    | Some el => el
-    | None => def
-  end).
-
-Compute cat [::1] [::2].
 
 Definition add_put_queries
            (to:nat)
@@ -728,7 +349,7 @@ Definition proc_count (ms:machine_state) : nat := size $ ms_procs ms.
 Definition has_puts_conflicts (ms:machine_state) : bool :=
   let proc_affected (i:nat) := map undup (puts_for_pid i ms) in
   let proc_good i := uniq $ flatten (proc_affected i) in
-  all proc_good $ nat_seq (proc_count ms).
+  ~~( all proc_good $ nat_seq (proc_count ms)).
 
 Definition all_puts (ms:machine_state) : seq (seq (seq put_query) ):=
   map ((flip puts_for_pid) ms) (nat_seq (proc_count ms)).
@@ -761,6 +382,9 @@ Definition apply_puts (ms:machine_state) : machine_state :=
   if has_puts_conflicts ms then MNeedSync (all_puts ms) (ms_procs (clear_puts ms)) (ms_source ms) else
   clear_puts $ transformations ms $ map apply_puts_for_id $ nat_seq $ size $ ms_procs ms.
 
+Definition  remove_sync_statements (ms:machine_state) : machine_state :=
+  ms_mod_proc_all (ps_mod_cont (drop 1)) ms.
+
 Fixpoint interpreter_step (ms: machine_state) : machine_state :=
   let pex_state := prod (prod error_code  (statement?)) proc_state in
   let interpret_proc s : pex_state :=
@@ -768,10 +392,11 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
       match proc_conts s with
         | nil => ((OK, None), s)
         | cur_statement::stts =>
+          let loop := ((OK, Some cur_statement), s) in
+          let s := ps_mod_cont (const stts) s  in
           let ok_with s := ((OK, Some cur_statement), s) in
           let err code := ((code, Some cur_statement), s) in
-          let loop := ok_with s in
-          let skip :=  ok_with $ ps_mod_cont (const stts) s in
+          let skip :=  ok_with s in
           let eval := iexpr ms pid in
           match cur_statement with
             | Skip => skip
@@ -832,10 +457,11 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
             | Enter => ok_with $ ps_mod_syms (cons nil) s
             | Leave => match proc_symbols s with
                          | nil => ((GenericError, Some cur_statement), s)
-                         | ctx::css => match apply_writes Deallocated s ctx with
-                                         | (OK, state) => ok_with state
+                         | ctx::css => ok_with (ps_mod_syms (const css) s)
+                                               (*match apply_writes Deallocated s ctx with
+                                         | (OK, state) => ok_with (ps_mod_syms (const css) state)
                                          | (code, s) => err code 
-                                       end
+                                       end*)
                        end                        
             | BspSync => loop (* wait for sync = error code? *)
             | BspPushReg x sz =>
@@ -845,7 +471,7 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
                 | _, _ => err TypeMismatch
               end
              
-            | BspPopReg x sz => match eval x with
+            | BspPopReg x => match eval x with
                 | Value (Pointer t)  (Goodptr to off) =>
                   ok_with $ ps_mod_queue_pop (cat [:: Pop (AnyPtr t (Goodptr t to off)) ]) s
                 | _ => err TypeMismatch
@@ -901,7 +527,7 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
     | MNeedSync _ _ _ => ms
     | MBad _ _ => ms
     | MGood pstates funcs =>
-      let synchronize: machine_state->machine_state := apply_puts \o
+      let synchronize: machine_state->machine_state := remove_sync_statements \o apply_puts \o
           apply_gets \o apply_push_regs \o apply_pop_regs  in
       let stepped_procs := map interpret_proc pstates in
       let waiting_sync (r: pex_state) := match r with | ((OK, Some BspSync), _) => true | _ => false end in
@@ -935,19 +561,185 @@ Inductive istep : machine_state -> machine_state -> Prop :=
     istep s s'.
 
 
+Definition state_from_main (bspnproc:nat) (f:function) :machine_state :=
+  let procs := map (fun pid=> mk_proc_state pid nil nil nil nil nil nil [:: body f ] nil) (nat_seq bspnproc) in
+  MGood procs [::f].
 
-(*Definition init_state_for (s:statement) := Good (stat_ctx_mod stat_init (fun _=> [:: mk_fun 0 "main" nil s 0 ] ) id ) $
-                                                mk_dyn_ctx  nil [:: s] .
-                          *)                      
+Definition LitI := Lit Int64 .
+Definition LocVar t name := Alloc Stack t (Some name%string) 1.
+
+Definition terminated (s:machine_state) : bool := all (fun x=>size x == 0) (map proc_conts (ms_procs s)).
 
 
 Fixpoint interpret (steps:nat) (state: machine_state) : machine_state :=
   match steps with | 0 => state
                 | S steps => match state with
+                               | MNeedSync _ _ _ 
                                | MBad _ _ => state
                                | MGood _ _ => interpret steps $ interpreter_step state
                              end
   end.
+
+Definition is_mgood (ms:machine_state) := match ms with
+                                            | MGood _ _ => true
+                                            | _ => false
+
+                                          end.
+Definition prop_is_mgood (ms:machine_state) := exists ps fs, ms = MGood ps fs.
+
+
+
+Definition defined_and_terminates (s:machine_state) := exists n, terminated (interpret n s) /\ prop_is_mgood( interpret n s).
+
+
+Definition testprog : function :=
+  mk_fun 0 "main" nil $ CodeBlock [::
+                                     LocVar Int64 "x" ;
+                                     BspPushReg (Var "x") (LitI (SizeOf Int64))
+                                                   ]
+
+.
+
+
+
+Theorem dnt_sample: defined_and_terminates (state_from_main 4 testprog).
+  rewrite /defined_and_terminates.  
+  exists 10.
+  split. done.
+  exists (ms_procs (interpret 10 (state_from_main 4 testprog))).  
+  exists (ms_source (interpret 10 (state_from_main 4 testprog))). (*here reflexivity hangs!*)
+  by cbv.
+Qed.
+
+Definition testprog2 : function :=
+  mk_fun 0 "main" nil $ CodeBlock [::
+                                     LocVar Int64 "x" ;
+                                    BspPushReg (Var "x") (LitI (SizeOf Int64));
+                                    BspSync ;
+                                    BspPopReg (Var "x");
+                                    BspSync
+                                  ].
+
+
+Theorem dnt_sample2: defined_and_terminates (state_from_main 4 testprog2).
+  rewrite /defined_and_terminates.
+  Compute (interpret 1 (state_from_main 4 testprog2)).
+  Compute (interpret 2 (state_from_main 4 testprog2)).
+  Compute (interpret 3 (state_from_main 4 testprog2)).
+  Compute (interpret 4 (state_from_main 4 testprog2)).
+  Compute (interpret 5 (state_from_main 4 testprog2)).
+  Compute (interpret 6 (state_from_main 4 testprog2)).
+  Compute apply_pop_regs (interpret 6 (state_from_main 4 testprog2)).
+
+  Eval cbv in (interpret 7 (state_from_main 4 testprog2)).
+           
+  exists 100.
+  split. cbv.
+  done.
+  exists (ms_procs (interpret 10 (state_from_main 4 testprog))).  
+  exists (ms_source (interpret 10 (state_from_main 4 testprog))). (*here reflexivity hangs!*)
+  by cbv.
+Qed.
+
+
+
+Definition current_instrs (s:machine_state) : seq statement :=
+  flatten $ map (take 1) (map proc_conts (ms_procs s)).
+
+Definition is_pop (s:statement) : bool := match s with | BspPopReg _ => true | _ => false end.
+
+Definition good_for_pop (ps: proc_state) : bool :=
+  match ohead $ proc_conts ps with
+    | Some (BspPopReg x) => size (proc_registered_locs ps) != 0
+    | _ => true
+  end.
+
+Definition good_for_pops ms :=
+  all good_for_pop (ms_procs ms).
+
+                         
+Definition pops_ok s:= is_mgood s -> forall n, prop_is_mgood ( interpret n s ) /\ good_for_pops (interpret n s).
+
+Theorem if_terminates_states_stays s (n:nat): defined_and_terminates s -> exists n, forall m, m >= n -> interpret n s = interpret m s .
+  move => H.
+  case H.
+  move=> x H'.
+  rewrite /defined_and_terminates in H.
+  destruct H' as [H0 H1].
+  destruct H as [y [H2 Hy]].
+  
+  
+
+Admitted.
+(*  move=> H.
+  case H.
+  move=> x H'.
+  exists x.
+  destruct H'.
+  elim.
+  simpl.
+  by case x.
+  move=> m H2 H3.
+  rewrite H2.
+  
+  simpl.
+  rewrite /terminated in H0.
+  
+  done.
+  done.
+  
+  Search (_ <= 0).
+  
+  rewrite 
+  done.
+  move=> m H3 H4.*)
+   
+Theorem pops_ok_sample: pops_ok (state_from_main 2 testprog2).
+  rewrite /pops_ok.
+  move => H n.
+  induction n =>//.
+            destruct IHn.
+  rewrite /is_mgood in H0.
+  
+
+  
+  simpl.
+  rewrite -H1.
+  simpl.
+  
+  case IHn.
+  
+       
+    by simpl.
+  
+  simpl.
+  
+  split.
+  induction n.  
+  compute.
+  
+  simpl.
+  
+  simpl.
+  
+  compute.
+  
+move=> Hg n.
+  induction n. split. done.
+  simpl.
+  case s. move => * *.
+  compute.
+  
+  simpl.
+  
+  rewrite good_for_pops.
+  
+  left.
+  =>//=.
+  simpl.
+    by left.
+   
+
 
 Definition statement_state (s:prog_state) (st:statement) := match s with
                                                               | Good x dc => Good x $ dyn_ctx_mod dc id (cons st)
@@ -962,8 +754,7 @@ Definition start_from_0th_fun (c:static_ctx): dynamic_ctx :=
   end.
 Definition init_state_for_prog (sc: static_ctx) := Good sc (start_from_0th_fun sc).
 
-
-Definition LocVar t name := Alloc Stack t (Some name%string) 1. 
+ 
 
 Notation "{{  x1 ; .. ; xn }}" := (CodeBlock(  cons x1  .. (cons xn nil) ..) ) (at level 35, left associativity) : c. 
 Notation "'int8 x " := (LocVar Int8 x) (at level 200, no associativity) :c.
