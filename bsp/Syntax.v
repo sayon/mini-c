@@ -48,9 +48,7 @@ Inductive unop: Set := | Neg | Invert | Not | Convert (to:ctype) | Amp | Asteris
        Definition unop_eq_dec := dec_from_reflect unop_eqP.
 
 Inductive expr :=
-       | Lit   (t:ctype) (_:coq_type(t))
-       | EDeallocated (t:ctype)
-       | EGarbage (t:ctype)
+       | Lit  (v:value) (* (t:ctype) (_:coq_type(t))*)
        | Var   (_:string)
        | Binop (_:binop) (_ _: expr)
        | Unop  (_:unop)  (_: expr)
@@ -98,19 +96,9 @@ Record function := mk_fun {
        fix 1.
        move => x y.
        case x; case y; try by right.
-       - move => t c t0 c0.
-         case Ht:(t == t0).
-         + move /eqP in Ht; subst.
-           move: (carrier_eq_dec t0 c0 c).
-           case; [by left; subst
-                 | by right; move =>[]=> H; depcomp H].
-         + by move /eqP in Ht; right; case; move=> He; symmetry in He.
-       - move=> t0 t; move: (ctype_eq_dec t0 t) =>[].
-         by move => ->; left.
-         by move=> H; right; case=> H'; symmetry in H'. 
-       - move=> t0 t; move: (ctype_eq_dec t0 t) =>[].
-           by move => ->; left. 
-           by move=> H; right; case=> H'; symmetry in H'.
+       - move=> v v0; move: (value_eq_dec v0 v) => [Hv|Hv].
+         by subst; left.
+           by right; case.
        - by move=> s0 s; move: (string_eq_dec s s0) => []; by[left; subst| right; case]. 
        - move=> op2 x2 y2 op1 x1 y1.
          move: (binop_eq_dec op1 op2) => [Hop|Hop]; 
@@ -122,7 +110,7 @@ Record function := mk_fun {
            by left.
        - by left.
        - by left.
-     Qed. 
+     Defined. 
 
      Definition expr_eqP := reflect_from_dec expr_eq_dec.
      

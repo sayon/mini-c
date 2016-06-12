@@ -4,17 +4,14 @@ From Coq.Strings Require Import Ascii String.
 Require Import Coq.Program.Program.
 Require Import Program.
 Require Import UtilString.
-Require Import ProofIrrelevance.
 Import intZmod.    
-Require Import Common Syntax Types State Memory.
+Require Import Common Syntax Types State Memory TestUtils.
 
 
 Fixpoint type_solver {ps:proc_state}  (e: expr) : ctype:=
   let slv := @type_solver ps  in
   match e with
-    | Lit t _ => t
-    | EDeallocated t => t
-    | EGarbage t => t
+    | Lit x => type_of_val x
     | Var name => match get_var ps name with
                     | Some v => Pointer $ var_type v
                     | None => ErrorType
@@ -28,6 +25,7 @@ Fixpoint type_solver {ps:proc_state}  (e: expr) : ctype:=
     | BspNProc => Int64
     | BspPid => Int64
   end.
+
 Definition div_sgn x y := match x,y with
                             | Posz _, Posz _
                             | Negz _, Negz _ => Posz 1
@@ -43,14 +41,27 @@ Definition idiv x y := intRing.mulz (div_sgn x y)
                                       | Negz x, Posz y => fst (div.edivn x y)
                                     end.
 
+Definition num_value (num:numeric) : int->value :=
+  match num with
+    | S8 => ValueI8
+    | U8 => ValueU8
+    | S16 => ValueI16
+    | U16 => ValueU16
+    | S32 => ValueI32
+    | U32 => ValueU32
+    | S64 => ValueI64
+    | U64 => ValueU64
+  end.
+
 Definition binop_interp (t:ctype) (op: binop) : int -> int -> value :=
   match t with
-    | Int num => match op with
-                   | Add => fun x y=> Value (Int num) $ addz x y
-                   | Sub => fun x y=> Value (Int num) $ addz x (oppz y)
-                   | Mul => fun x y=> Value (Int num) $ intRing.mulz x y
-                   | Eq  => fun x y=> Value (Int num) $ Posz $ if x == y then 1 else 0
-                   | Div => fun x y=> Value (Int num) $ idiv x y
+    | Int kind =>   let v := num_value kind  in
+                   match op with
+                   | Add => fun x y=> v $ addz x y
+                   | Sub => fun x y=> v $ addz x (oppz y)
+                   | Mul => fun x y=> v $ intRing.mulz x y
+                   | Eq  => fun x y=> v $ Posz $ if x == y then 1 else 0
+                   | Div => fun x y=> v $ idiv x y
                    | _ => fun _ _ => Error
                  end
     | _ => fun _ _ => Error
@@ -60,8 +71,8 @@ Definition unop_interp (t:ctype) (op:unop) : int -> value  :=
   match t with
     | Int kind =>
       match op with
-        | Neg => fun x => Value (Int kind) $ oppz x
-        | Not => fun x => Value (Int kind) $ Posz $ if sgz x == 0 then 1 else 0
+        | Neg => fun x => num_value kind $ oppz x
+        | Not => fun x => num_value kind $ Posz $ if sgz x == 0 then 1 else 0
         | _ => fun _ => Error
       end
     | _ => fun _ => Error
@@ -70,16 +81,51 @@ Definition unop_interp (t:ctype) (op:unop) : int -> value  :=
 Definition find_block (ps: proc_state) (i: nat)  : option block :=
   option_find (fun b=> block_id b == i) $ proc_memory ps.
 
+
+
+Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
+  match ms with
+    | MNeedSync _ pss fs 
+    | MGood  pss fs  =>
+      match option_nth pss pid with
+        | None => None
+        | Some ps => match option_nth (proc_memory ps) bid with
+                       | Some bl => Some (el_type bl, slice offset size $ contents bl)
+                       | None => None
+                     end
+      end
+    | MBad _ _ => None
+  end.
+
+
 Definition dereference (ps: proc_state) (v:value) : value :=
   match v with
-    | Value (Pointer pt) (Goodptr i o) =>
+    | ValuePtr (AnyPtr pt (Goodptr i o)) =>       
       match option_nth (proc_memory ps) i with
-        | Some (mk_block lo _i sw sz block_type contents) =>
-          if block_type == pt then nth Error contents o else Error
+        | Some (mk_block lo _i sz block_type contents) =>
+          if block_type == pt then nth Error  contents o else Error
         | None => Error
       end
     | _ => Error
   end.
+(*
+Program Definition ValueFromLit (t: ctype) (l: coq_type t) : value :=
+  match t with
+    | Int S8 => ValueOfType S8 (cast l _ )
+    | Int U8 => _
+    | Int S16 => _
+    | Int U16 => _
+    | Int S32 => _
+    | Int U32 => _
+    | Int S64 => _
+    | Int U64 => _
+    | Pointer p => _
+    | Struct ls => _
+    | Bot => _
+    | Unit => _
+    | ErrorType => _
+  end
+.*)
 
 Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
   match ms with
@@ -95,35 +141,49 @@ Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
           let blocks := proc_memory ps in
 
           match e with
-            | BspNProc => Value Int64 $ size procs
-            | BspPid => Value Int64 $ pid
-            | Lit t v => Value t v
-            | EDeallocated t => Deallocated
-            | EGarbage t => Garbage
+            | BspNProc => ValueI64 $ size procs
+            | BspPid => ValueI64 $ pid
+            | Lit v => v 
             | Var name => match get_var ps name  with
                             | Some (declare_var n t loc) =>
                               match find_block ps loc with
                                 | Some b =>
                                   if el_type b == t
-                                  then Value (Pointer t) (Goodptr t loc 0)
+                                  then ValuePtr (AnyPtr t (Goodptr t loc 0))
                                   else Error
                                 | None => Error
                               end
                             | None => Error
                           end
+                            
             | Binop opcode l r =>
               match interp l, interp r with
-                | Value (Int kx) x, Value (Int ky) y =>
-                  eq_value_or_error_arith (Int kx) (Int ky) (fun tx ty => binop_interp (type e) opcode x y) Error
-                | _, _ => Error
+                      | ValueI64 x, ValueI64 y 
+                      | ValueI32 x, ValueI32 y
+                      | ValueI16 x, ValueI16 y
+                      | ValueI8  x, ValueI8  y
+                      | ValueU64 x, ValueU64 y
+                      | ValueU32 x, ValueU32 y
+                      | ValueU16 x, ValueU16 y
+                      | ValueU8  x, ValueU8  y => binop_interp (type l) opcode x y                                             
+                      | _, _ => Error
               end
+
             | Unop Asterisk op => match interp op with
-                                    | Value (Pointer pt) p => dereference ps (interp op)
+                                    | ValuePtr _ => dereference ps (interp op)
                                     |_ => Error
                                   end
+            
             | Unop code op =>
               match interp op with
-                | Value (Int kind) v => unop_interp (type e) code v
+                | ValueI64 x
+                | ValueI32 x
+                | ValueI16 x
+                | ValueI8  x
+                | ValueU64 x
+                | ValueU32 x
+                | ValueU16 x
+                | ValueU8  x => unop_interp (type e) code x
                 |_ => Error
               end
           end
@@ -134,61 +194,92 @@ Definition alloc_block (ps: proc_state) (b:block) : proc_state := ps_mod_mem (ca
 
 Definition next_block_id : proc_state -> nat := size \o proc_memory.
 
-
-
-Definition ex_block : block := mk_block Stack 0 64 nil Int64 (fill Garbage 8).
-
+Definition ex_block : block := mk_block Stack 0 64 Int64 (fill Garbage 8).
 
 (* FIXME maybe we should implement type changes ? *)
 
 
 Definition is_value_true {ps:proc_state} (v: value) : option bool:=
   match v with
-    | Value (Int kind) z => Some $ sgz z != 0
-    | Value (Pointer _) Nullptr => Some false
-    | Value (Pointer _) (Goodptr _ _) => Some true 
+    | ValueI64 x
+    | ValueI32 x
+    | ValueI16 x
+    | ValueI8  x
+    | ValueU64 x
+    | ValueU32 x
+    | ValueU16 x
+    | ValueU8  x => Some $ sgz x != 0
+    | ValuePtr (AnyPtr _ Nullptr) => Some false
+    | ValuePtr (AnyPtr _ _) => Some true 
     | _ => None 
-  end.
-  
+  end.  
  
 
-Definition LitFromExpr (ms: machine_state) (pid:nat) (e:expr): expr ? :=
-  match iexpr ms pid e  with
-    | Value t v => Some $ Lit t v 
-    | Garbage =>  None 
-    | Deallocate => None 
-  end .
-
+Definition LitFromExpr (ms: machine_state) (pid:nat) (e:expr): expr :=
+  Lit (iexpr ms pid e).
  
-Definition prologue_arg (ms: machine_state) (pid:nat) (name:string) (t:ctype) (e:expr) :=
-  option_map (fun l =>  [:: Alloc Stack t (Some name) 1; Assign (Var name) l] ) $ LitFromExpr ms pid e.
+Definition prologue_arg (ms: machine_state) (pid:nat) (name:string) (t:ctype) (e:expr) : seq statement :=
+  let l :=  LitFromExpr ms pid e in
+  [:: Alloc Stack t (Some name) 1; Assign (Var name) l].
 
-Definition prologue_args (ms:machine_state) (pid:nat) (f:function) (es: seq expr) :=
+
+Definition prologue_args (ms:machine_state) (pid:nat) (f:function) (es: seq expr) : seq statement :=
   let vals :=  map (fun a => prologue_arg ms pid (fst (fst a)) (snd (fst a)) (snd a)) $ zip (args f) es in
-  foldl cat_if_some (Some nil) vals.
+  flatten vals.
 
-Definition prologue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq expr) : option ( seq statement)  :=
-  option_map (cons Enter) $ prologue_args ms pid f argvals.
+Definition prologue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq expr) : seq statement  :=
+  cons Enter $ prologue_args ms pid f argvals.
 
-Definition epilogue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq expr) : option ( seq statement)  := Some [:: Leave].
+Definition epilogue_for (ms: machine_state) (pid:nat) (f:function) (argvals: seq expr) : seq statement  :=[:: Leave].
 
 (* add tests *)
 
-Definition apply_writes  (v:value) (s:proc_state) (vars: seq var_descr) :=
-  let fix process ids st :=
-      match ids with
-        | i :: iis =>
-          match mem_write_block i v st with
-            | (OK, st) =>  process iis st
-            | o => o
-          end
-        | nil => (OK, st)
-      end
-  in
-  process (map location vars) s.
+Definition apply_writes  (v:value) (s:proc_state) (vars: seq var_descr): proc_state ? :=
+  let transforms_pairs := map (fun vd=> mem_write (location vd) 0 v ) vars in
+  let good := all (fun x=> fst (x s) == OK) transforms_pairs in
+  if good then Some  $ transformations s (  map (fun f => snd \o f) transforms_pairs ) else None.
 
 
-Fixpoint init_value (t:ctype) (l: storage) : value :=
+Check assert_eq _ : apply_writes (ValueI64 34)
+        (mk_proc_state 0 [:: [::]; [:: declare_var "x" Int64 0; declare_var "y" Int32 1] ] nil nil nil nil (**)
+                       [::
+                          mk_block Stack 0 1 Int64 [:: ValueI64 99] ;
+                          mk_block Stack 1 1 Int32 [:: ValueI64 99] 
+                       ]
+
+                       nil nil) [:: declare_var "x" Int64 0] = Some
+         {|
+         proc_id := 0;
+         proc_symbols := [[];
+                         [{|
+                          var_name := "x";
+                          var_type := Int S64;
+                          location := 0 |};
+                         {|
+                         var_name := "y";
+                         var_type := Int S32;
+                         location := 1 |}]]%list;
+         proc_queue_get := []%list;
+         proc_queue_put := []%list;
+         proc_queue_pop_reg := []%list;
+         proc_queue_push_reg := []%list;
+         proc_memory := [{|
+                         region := Stack;
+                         block_id := 0;
+                         block_size := 1;
+                         el_type := Int S64;
+                         contents := [ValueI64 34] |};
+                        {|
+                        region := Stack;
+                        block_id := 1;
+                        block_size := 1;
+                        el_type := Int S32;
+                        contents := [ValueI64 99] |}]%list;
+         proc_conts := []%list;
+         proc_registered_locs := []%list |}.
+
+
+Definition init_value (t:ctype) (l: storage) : value :=
   match l with
     | Heap 
     | Stack
@@ -197,20 +288,6 @@ Fixpoint init_value (t:ctype) (l: storage) : value :=
     | Data => Garbage
   end.
 
-
-Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
-  match ms with
-    | MNeedSync _ pss fs 
-    | MGood  pss fs  =>
-      match option_nth pss pid with
-        | None => None
-        | Some ps => match option_nth (proc_memory ps) bid with
-                       | Some bl => Some (el_type bl, take size (drop offset (contents bl)))
-                       | None => None
-                     end
-      end
-    | MBad _ _ => None
-  end.
 
 Fixpoint write_proc_memory (ms:machine_state) (pid:nat) (bid offset: nat) (vals: seq value) : machine_state? :=
   match ms with
@@ -229,18 +306,15 @@ Fixpoint write_proc_memory (ms:machine_state) (pid:nat) (bid offset: nat) (vals:
     | MBad _ _ => None
   end.
 
-Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
-  foldl (fun x f=> f x) init ts.
+Definition state_from_main (bspnproc:nat) (f:function) :machine_state :=
+  let procs := map (fun pid=> mk_proc_state pid nil nil nil nil nil nil [:: body f ] nil) (iota 0 bspnproc) in
+  MGood procs [::f].
 
-Definition ms_mod_proc_all (f:proc_state->proc_state) (ms:machine_state) :=
-  match ms with
-    | MNeedSync q ps fs => MNeedSync q (map f ps) fs 
-    | MGood ps fs  => MGood (map f ps) fs
-    | MBad _ _ =>  ms
-  end.
-  
-Definition ms_mod_proc (pid:nat) (f:proc_state->proc_state) : machine_state->machine_state :=
-  ms_mod_proc_all (fun p=> if proc_id p == pid then f p else p).
+Let dumb_state := let ms := state_from_main 2 (mk_fun 0 "" nil Skip) in
+                  ms_mod_proc 1 (ps_mod_mem (const [:: mk_block Stack 0 10 Int64 (fill (ValueI64 44) 10)])) ms.
+
+Compute write_proc_memory dumb_state 1 0 1 [:: ValueI64 1; ValueI64 2].
+(*BUG*)
 
 Definition push_reg_to_p_transform (p:push_query): proc_state -> proc_state :=
   match p with

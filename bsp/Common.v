@@ -141,6 +141,9 @@ Definition extract_some {T} (x:  T ? ? ) : T? :=
 Fixpoint  fill {T} (v: T)  (sz: nat)  : seq T :=
   match sz with | n .+1 => v :: (fill v n) | 0 => [::] end.
 
+Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
+  foldl (fun x f=> f x) init ts.
+
 
 
 
