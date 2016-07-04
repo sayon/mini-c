@@ -10,10 +10,10 @@ Require Import Syntax Common Types Memory.
 Inductive get_query := Get t:  nat-> ptr t-> int -> ptr t -> nat -> get_query .
    Theorem get_query_eq_dec: eq_dec get_query.
      move=> [t_x pid_x src_x off_x dest_x size_x] [ t_y pid_y src_y off_y dest_y size_y].
-     eq_comp ctype_eq_dec t_x t_y.
-     eq_comp nat_eq_dec pid_x pid_y.
-     eq_comp int_eq_dec off_x off_y.
-     eq_comp nat_eq_dec size_x size_y.
+     eq_compi t_x t_y.
+     eq_compi pid_x pid_y.
+     eq_compi off_x off_y.
+     eq_compi size_x size_y.
      eq_comp (ptr_eq_dec t_y) src_x src_y.
      eq_comp (ptr_eq_dec t_y) dest_x dest_y.
    Qed.
@@ -277,8 +277,6 @@ Definition write (bid:nat) (offset_bytes: nat) (new_val:value) (ps:proc_state) :
   end
 .
 
-Definition map_fst { T U V } (f:T->V) (p: T*U) := match p with | (x,y) => (f x,y) end.
-Definition map_snd { T U V } (f:U->V) (p: T*U) := match p with | (x,y) => (x,f y) end.
                                                             
 Definition write_to (pid bid offset_bytes : nat) new_val ms :machine_state :=
   let procs := ms_procs ms in
@@ -289,7 +287,9 @@ Definition write_to (pid bid offset_bytes : nat) new_val ms :machine_state :=
     | Some (code, p) => MBad (mod_at (code, p) pid (map_fst (const code)) oks) (ms_source ms)
   end.
 
-                                                                 
+
+
+
 Definition mem_mod_block (bid:nat) (f:block->block) (ps:proc_state) : proc_state :=
   ps_mod_mem (mod_at ErrorBlock bid f) ps.
 
@@ -303,6 +303,25 @@ Definition mem_fill_block (bid:nat) (val:value) (ps: proc_state): proc_state :=
   in
  
   mem_mod_block bid block_trans ps.
+
+
+Definition divn x := fst \o div.edivn x.
+Definition remn x := snd \o div.edivn x.
+
+Definition dereference (ps: proc_state) (v:value) : value :=
+  match v with
+    | ValuePtr (AnyPtr pt (Goodptr i o)) =>
+      match option_nth (proc_memory ps) i with
+        | Some (mk_block lo _i sz block_type contents) =>
+          if (block_type == pt) && ( o < sz ) && (remn o (size_of pt) == 0)
+          then
+            nth Garbage contents (divn o (size_of pt))
+          else Error
+        | None => Error
+      end
+    | _ => Error
+  end.
+
 
 
 

@@ -1,4 +1,4 @@
-From mathcomp Require Import ssrint seq. 
+From mathcomp Require Import ssrint seq.  
 Require Import Common Types Memory State.
 
 Local Definition sample_block s := mk_block Data 0 (s * size_of (Int S64)) Int64 $ fill (ValueI64 0) s.
@@ -109,3 +109,13 @@ Check Logic.eq_refl:  write   0 12 (ValueI32 66) (mem_fill_block 0 (ValueI32 11)
                            proc_queue_hpget := [::] |}).
 Check Logic.eq_refl:  write   0 11 (ValueI32 66) (mem_fill_block 0 (ValueI32 11) (ps 2) )
                       = (BadWriteLocation, (mem_fill_block 0 (ValueI32 11) (ps 2) ) ).
+
+Compute  ps 2.
+
+Section DerefTests.
+Definition tstate b i:= dereference (snd (write 0 8 (ValueI64 2) (ps 2))) (ValuePtr (AnyPtr (Int S64) (Goodptr (Int S64) b i))).
+Check Logic.eq_refl: ValueI64 0 = tstate 0 0 .
+Check Logic.eq_refl: Error = tstate 0 1.
+Check Logic.eq_refl: Error = tstate 0 4.
+Check Logic.eq_refl: ValueI64 2 = tstate 0 8.
+Check Logic.eq_refl: Error = tstate 0 16.

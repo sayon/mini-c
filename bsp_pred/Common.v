@@ -61,7 +61,10 @@ Qed.
 
 Canonical string_eqMixin := EqMixin string_eqP.
 Canonical string_eqType := EqType string string_eqMixin.
-  
+
+(*** Pairs helpers ***)
+Definition map_fst { T U V } (f:T->V) (p: T*U) := match p with | (x,y) => (f x,y) end.
+Definition map_snd { T U V } (f:U->V) (p: T*U) := match p with | (x,y) => (x,f y) end.
 
 (*** Decidable quality and reflect *)
 Definition eq_dec T := forall x y: T, {x = y} + {~ x = y}.
@@ -140,6 +143,16 @@ Theorem seq_eq_dec {T}: eq_dec T -> eq_dec ( seq T ).
          ** by right; case.
 Qed.
 
+
+Fixpoint  fill {T} (v: T)  (sz: nat)  : seq T :=
+  match sz with | n .+1 => v :: (fill v n) | 0 => [::] end.
+
+Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
+  foldl (fun x f=> f x) init ts.
+
+
+
+
 Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
   match filter p s with
     | nil => None
@@ -177,9 +190,6 @@ Definition cat_if_some {T} (l r: option ( seq T) ) : option (seq T):=
     | _, _ => None
     end.
 
-Notation "x /++/ y" := (cat_if_some x y) (at level 35).
-
-
 
 Theorem option_eq_dec (t:eqType) : eq_dec (option t).
   move => x y.
@@ -194,6 +204,13 @@ Canonical option_eqType (t:eqType) := EqType (option t) (option_eqMixin t).
 
 
 
+Definition uncurry {a b c} (f: a -> b -> c) :  (a * b) -> c :=
+  fun x => match x with
+             | (m,n) => f m n
+           end.
+
+
+
 Fixpoint seq_unsome {T} (s: seq (option T)) : option (seq T) :=
   match s with
     | (Some x) :: xs => option_map (cons x) $ seq_unsome xs
@@ -201,10 +218,6 @@ Fixpoint seq_unsome {T} (s: seq (option T)) : option (seq T) :=
     | None :: _ => None
   end.
 
-Definition uncurry {a b c} (f: a -> b -> c) :  (a * b) -> c :=
-  fun x => match x with
-             | (m,n) => f m n
-           end.
 
 Definition unsome_bool x :=
   match x with
@@ -228,13 +241,6 @@ Definition option_bind {T U} (f:T-> U?) (x:T?) :=
     | None => None
   end.
                               
-
-Fixpoint  fill {T} (v: T)  (sz: nat)  : seq T :=
-  match sz with | n .+1 => v :: (fill v n) | 0 => [::] end.
-
-Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
-  foldl (fun x f=> f x) init ts.
-
 
 Definition add_n_z (x:nat) (y:int) :=
   match intZmod.addz x y with
