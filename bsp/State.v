@@ -141,6 +141,17 @@ Definition ms_mod_proc_all (f:proc_state->proc_state) (ms:machine_state) :=
     | MBad _ _ =>  ms
   end.
 
+Definition ms_mod_proc_all_or_fail (f:proc_state->proc_state ?) (ms:machine_state) :=
+
+  match ms with
+    | MNeedSync q ps fs =>   let newprocs := seq_unsome (map f ps) in
+                             option_map (fun p => MNeedSync q p fs) newprocs
+    | MGood ps fs  =>   let newprocs := seq_unsome (map f ps) in
+                              option_map (fun p => MGood p fs) newprocs
+                              | MBad _ _ =>  None
+  end.
+
+
 Definition ms_for_proc {T} (ms:machine_state) (pid:nat) (f: proc_state -> T) : T? :=
   option_map f $  option_nth (ms_procs ms) pid.
 

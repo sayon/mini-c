@@ -3,8 +3,10 @@ From mathcomp.algebra Require Import ssrint ssralg.
 From Coq.Strings Require Import Ascii String.
 Require Import Coq.Program.Program.
 Require Import Program.
-Require Import UtilString.
-Import intZmod.    
+Import intZmod.
+
+Require Import Coq.Relations.Relation_Operators.
+
 Require Import Common Syntax Types State Memory TestUtils.
 
 
@@ -19,7 +21,7 @@ Fixpoint type_solver {ps:proc_state}  (e: expr) : ctype:=
     | Binop _ l r => eq_value_or_error_arith (slv l) (slv r) (fun t _ => t) ErrorType
     | Unop Asterisk op => match slv op with
                             | Pointer t => t
-                            | _ => Bot
+                            | _ => ErrorType
                           end
     | Unop _ o => slv o
     | BspNProc => Int64
@@ -53,39 +55,36 @@ Definition num_value (num:numeric) : int->value :=
     | U64 => ValueU64
   end.
 
-Definition binop_interp (t:ctype) (op: binop) : int -> int -> value :=
+Definition binop_interp (t:ctype) (op: binop) x y : value :=
   match t with
-    | Int kind =>   let v := num_value kind  in
+    | Int kind =>let v := num_value kind  in
                    match op with
-                   | Add => fun x y=> v $ addz x y
-                   | Sub => fun x y=> v $ addz x (oppz y)
-                   | Mul => fun x y=> v $ intRing.mulz x y
-                   | Eq  => fun x y=> v $ Posz $ if x == y then 1 else 0
-                   | Div => fun x y=> v $ idiv x y
-                   | _ => fun _ _ => Error
+                   | Add => v $ addz x y
+                   | Sub => v $ addz x (oppz y)
+                   | Mul => v $ intRing.mulz x y
+                   | Eq  => v $ Posz $ if x == y then 1 else 0
+                   | Div =>  v $ idiv x y
+                   | _ => Error
                  end
-    | _ => fun _ _ => Error
+    | _ => Error
   end.
 
-Definition unop_interp (t:ctype) (op:unop) : int -> value  :=
+Definition unop_interp (t:ctype) (op:unop) x : value  :=
   match t with
     | Int kind =>
       match op with
-        | Neg => fun x => num_value kind $ oppz x
-        | Not => fun x => num_value kind $ Posz $ if sgz x == 0 then 1 else 0
-        | _ => fun _ => Error
+        | Neg => num_value kind $ oppz x
+        | Not => num_value kind $ Posz $ if sgz x == 0 then 1 else 0
+        | _ => Error
       end
-    | _ => fun _ => Error
+    | _ => Error
   end.
   
 Definition find_block (ps: proc_state) (i: nat)  : option block :=
   option_find (fun b=> block_id b == i) $ proc_memory ps.
 
-
-
 Definition read_proc_memory (ms:machine_state) (pid:nat) (bid offset size:nat) : (ctype * seq value)? :=
   match ms with
-    | MNeedSync _ pss fs 
     | MGood  pss fs  =>
       match option_nth pss pid with
         | None => None
@@ -130,7 +129,6 @@ Program Definition ValueFromLit (t: ctype) (l: coq_type t) : value :=
 Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
   match ms with
     | MBad  _ _ => Error
-    | MNeedSync _ _ _ => Error
     | MGood procs _ => 
       match option_nth procs pid with
         | None => Error
@@ -170,7 +168,7 @@ Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
               end
 
             | Unop Asterisk op => match interp op with
-                                    | ValuePtr _ => dereference ps (interp op)
+                                    | ValuePtr _  => dereference ps (interp op)
                                     |_ => Error
                                   end
             
@@ -199,7 +197,7 @@ Definition ex_block : block := mk_block Stack 0 64 Int64 (fill Garbage 8).
 (* FIXME maybe we should implement type changes ? *)
 
 
-Definition is_value_true {ps:proc_state} (v: value) : option bool:=
+Definition is_value_true {ps:proc_state} (v: value) : bool ? :=
   match v with
     | ValueI64 x
     | ValueI32 x
@@ -291,11 +289,39 @@ Definition init_value (t:ctype) (l: storage) : value :=
 Definition  write_proc_memory (bid offset: nat) (val: value) (ps: proc_state ) : proc_state ? :=
   match option_nth (proc_memory ps) bid with
     | Some b => if block_size b > offset  then
-                Some $  ps_mod_mem (mod_at ErrorBlock bid (block_mod_cont (mod_at ValueError offset (const val) ))) ps
+                Some $  ps_mod_mem (mod_at ErrorBlock bid (block_mod_cont (mod_at Error offset (const val) ))) ps
                 else None
                        
     | None => None
   end.
+
+
+Let dumb_proc_state: proc_state := Eval cbv in mk_proc_state 0 nil nil nil nil nil [:: mk_block Stack 0 10 Int64 (fill (ValueI64 44) 10)] nil nil.
+
+Check Logic.eq_refl: Some
+         {|
+         proc_id := 0;
+         proc_symbols := []%list;
+         proc_queue_get := []%list;
+         proc_queue_put := []%list;
+         proc_queue_pop_reg := []%list;
+         proc_queue_push_reg := []%list;
+         proc_memory := [{|
+                         region := Stack;
+                         block_id := 0;
+                         block_size := 10;
+                         el_type := Int S64;
+                         contents := [ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 3; ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44] |}]%list;
+         proc_conts := []%list;
+         proc_registered_locs := []%list |}.
 
 Fixpoint mon_transformations {A} (s:A) (ts: seq (A -> (A ?))) : A? :=
   match ts with
@@ -311,29 +337,54 @@ Definition mult_write_proc_memory (bid offset: nat) (vals: seq value) (ps: proc_
   let mts:= map (uncurry (fun val off => write_proc_memory bid off val )) $ zip vals (iota offset (size vals)) in
                     mon_transformations ps mts.
 
+Compute mult_write_proc_memory 0 2 [:: ValueI64 1; ValueI64 2] dumb_proc_state.
+
+Check Logic.eq_refl: Some
+         {|
+         proc_id := 0;
+         proc_symbols := []%list;
+         proc_queue_get := []%list;
+         proc_queue_put := []%list;
+         proc_queue_pop_reg := []%list;
+         proc_queue_push_reg := []%list;
+         proc_memory := [{|
+                         region := Stack;
+                         block_id := 0;
+                         block_size := 10;
+                         el_type := Int S64;
+                         contents := [ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 1; ValueI64 2; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44; 
+                                     ValueI64 44] |}]%list;
+         proc_conts := []%list;
+         proc_registered_locs := []%list |}.
+
 Fixpoint write_memory (ms:machine_state) (pid:nat) (bid offset: nat) (vals: seq value) : machine_state :=
-  let f p := if proc_id p == pid then mult_write_proc_memory bid offset vals p else None in
+  let f p := if proc_id p == pid then mult_write_proc_memory bid offset vals p else Some p in
   match  seq_unsome $ map f $ ms_procs ms with
     | Some pss => match ms with
                     | MGood _ fs => MGood pss fs
-                    | MNeedSync q _ fs => MNeedSync q pss fs
                     | bad => bad end
-    | None => MBad (map (fun p => pair (pair (if proc_id p == pid then BadWriteLocation else OK) None) p ) (ms_procs ms)) (ms_source ms) 
+    | None => MBad (map (fun p => pair (if proc_id p == pid then BadWriteLocation else OK) p ) (ms_procs ms)) (ms_source ms) 
   end.
 
 Definition state_from_main (bspnproc:nat) (f:function) :machine_state :=
   let procs := map (fun pid=> mk_proc_state pid nil nil nil nil nil nil [:: body f ] nil) (iota 0 bspnproc) in
   MGood procs [::f].
 
+Definition empty_state (bspnproc:nat) :machine_state :=
+  let procs := map (fun pid=> mk_proc_state pid nil nil nil nil nil nil nil nil) (iota 0 bspnproc) in
+  MGood procs [::].
+
 Let dumb_state := let ms := state_from_main 2 (mk_fun 0 "" nil Skip) in
                   ms_mod_proc 1 (ps_mod_mem (const [:: mk_block Stack 0 10 Int64 (fill (ValueI64 44) 10)])) ms.
 
-Compute dumb_state.
 
-Let dumb_proc_state: proc_state := mk_proc_state 0 nil nil nil nil nil [:: mk_block Stack 0 10 Int64 (fill (ValueI64 44) 10)] nil nil.
-
-Compute write_memory dumb_state 1 0 1 [:: ValueI64 1; ValueI64 2].
-(*BUG*)
 
 Definition push_reg_to_p_transform (p:push_query): proc_state -> proc_state :=
   match p with
@@ -374,9 +425,8 @@ Definition has_to_pop (ms:machine_state) : bool :=
 Definition apply_pop_regs (ms:machine_state) : machine_state :=
   match ms with
     | MBad _ _  => ms
-    | MNeedSync _ _ _  => ms
     | MGood ps fs => if all (fun x=> size (proc_queue_pop_reg x) == 0) (ms_procs ms) then ms else
-      let bad := MBad ( map (fun x=> pair (pair InvalidPopReg None) x) (ms_procs ms))  fs  in
+      let bad := MBad ( map (fun x=> pair InvalidPopReg x) (ms_procs ms))  fs  in
       if coherent_reg_positions ms then
         match slice_pop_requests ms with
           | Some (req::reqs , reduced_ms) =>
@@ -393,7 +443,7 @@ Definition apply_pop_regs (ms:machine_state) : machine_state :=
 
 
 Definition get_to_ms_transform (pid:nat) (q:get_query) (ms:machine_state) : machine_state  :=
-  let bad := MBad (map (pair (pair InvalidGet None)) (ms_procs ms)) $ ms_source ms in
+  let bad := MBad (map (pair InvalidGet) (ms_procs ms)) $ ms_source ms in
   match q with
     | Get t frompid (Goodptr bid offset) offset' (Goodptr bid_to offset_to) size =>
       match add_n_z offset offset' with
@@ -462,18 +512,349 @@ Definition apply_puts_for_id (pid:nat) (ms:machine_state) : machine_state :=
   let transforms := map option_bind $ map (put_query_to_ms_transform pid) puts in
   match transformations (Some ms) transforms with
     | Some ms => ms
-    | None => MBad ( map (pair (pair InvalidPut None))  (ms_procs ms)) (ms_source ms)
+    | None => MBad ( map (pair InvalidPut)  (ms_procs ms)) (ms_source ms)
   end.
          
 Definition clear_puts (ms:machine_state) : machine_state :=
   ms_mod_proc_all  (ps_mod_queue_put (const nil)) ms.
 
-Definition apply_puts (ms:machine_state) : machine_state :=
+(*Definition apply_puts (ms:machine_state) : machine_state :=
   if has_puts_conflicts ms then MNeedSync (all_puts ms) (ms_procs (clear_puts ms)) (ms_source ms) else
   clear_puts $ transformations ms $ map apply_puts_for_id $ iota 0 $ size $ ms_procs ms.
 
 Definition  remove_sync_statements (ms:machine_state) : machine_state :=
   ms_mod_proc_all (ps_mod_cont (drop 1)) ms.
+*)
+(* select one of processes and make a step
+OR make a hp atomic write/read 
+OR select a put operation 
+*)
+
+
+Definition has_bsp_queues ps := match ps with
+                                  | mk_proc_state _ _ nil nil nil nil _ _ _ => false
+                                  | _ => true
+                                end.
+
+
+Definition should_pop ps : bool := match ps with
+                                  | mk_proc_state _ _ _ _ _ _ _ (BspSync::_) _ => true
+                                  | _ => false
+                          end.
+Definition should_push ps : bool := match ps with
+                                  | mk_proc_state _ _ nil _ _ _ _ (BspSync::_) _ => true
+                                  | _ => false
+                          end.
+Definition should_get ps : bool := match ps with
+                                  | mk_proc_state _ _ nil nil _ _ _ (BspSync::_) _ => true
+                                  | _ => false
+                          end.
+Definition should_put ps : bool := match ps with
+                                  | mk_proc_state _ _ nil nil nil _ _ (BspSync::_) _ => true
+                                  | _ => false
+                          end.
+
+Definition should_sync (ms:machine_state) :=
+  all (fun p => match proc_conts p with | BspSync :: _ => true  | _ => false end) (ms_procs ms).
+
+Definition  remove_sync_statements (ms:machine_state) : machine_state :=
+  ms_mod_proc_all (ps_mod_cont (drop 1)) ms.
+
+
+
+
+  
+Inductive ss_reduce (s s' : machine_state) : Prop :=
+| ss_skip pid: forall procs source proc _procs proc' _conts,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Skip :: _conts ->
+                    proc' = ps_mod_cont (const _conts) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_assign pid: forall procs source proc _procs proc' _conts w val t to off v,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = (Assign w val) :: _conts ->
+                    iexpr s pid w = ValuePtr (AnyPtr t (Goodptr t to off)) ->
+                    iexpr s pid val = v ->
+                    type_of_val v = t ->
+                    (OK, proc') = mem_write to off v proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_alloc_anon pid:  forall procs source proc _procs proc' _conts loc type sz,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Alloc loc type None sz :: _conts ->
+                    proc' =  ps_mod_mem (cons $ mk_block loc (next_block_id proc) sz type (fill (init_value type loc) sz) ) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_alloc pid:  forall procs source proc _procs proc' _conts loc type name sz,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Alloc loc type (Some name) sz :: _conts ->
+                    proc' = add_var
+                              (declare_var name type (next_block_id proc))
+                              (ps_mod_mem (cons $ mk_block loc (next_block_id proc) sz type (fill (init_value type loc) sz) ) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+
+| ss_if_true pid: forall procs source proc _procs proc' _conts _cond _then _else,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = (If _cond _then _else) :: _conts ->
+                    @is_value_true proc (iexpr s pid _cond)= Some true ->
+                    proc' = ps_mod_cont (const (_then::_conts)) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+                              
+| ss_if_false pid: forall procs source proc _procs proc' _conts _cond _then _else,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = (If _cond _then _else) :: _conts ->
+                    @is_value_true proc (iexpr s pid _cond)= Some false ->
+                    proc' = ps_mod_cont (const (_else::_conts)) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+                              
+| ss_while_true pid: forall procs source proc _procs proc' _conts _cond _body,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = (While _cond _body) :: _conts ->
+                    @is_value_true proc (iexpr s pid _cond)= Some true ->
+                    proc' = ps_mod_cont (cons _body) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+                              
+| ss_while_false pid: forall procs source proc _procs proc' _conts _cond _body,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = (While _cond _body) :: _conts ->
+                    @is_value_true proc (iexpr s pid _cond) = Some false ->
+                    proc' = ps_mod_cont (const _conts) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_codeblock pid: forall procs source proc _procs proc' _conts stts,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = CodeBlock stts :: _conts ->
+                    proc' = ps_mod_cont (const $ [:: Enter] ++ stts ++ [::Leave] ++ _conts) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_call pid: forall procs source proc _procs proc' _conts f fname fargs,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Call fname fargs :: _conts ->
+                    Some f = get_fun s fname ->
+                    proc' = ps_mod_cont (cat $ prologue_for s pid f fargs ++ body f :: epilogue_for s pid f fargs) proc ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_enter pid: forall procs source proc _procs proc' _conts,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Enter :: _conts ->
+                    proc' = ps_mod_syms (cons nil) ( ps_mod_cont (const _conts) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_leave pid: forall procs source proc _procs proc' _conts ctx css,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = Leave :: _conts ->
+                    proc_symbols proc = ctx::css ->
+                    proc' =  ps_mod_syms (const css) (ps_mod_cont (const _conts) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_bsp_push pid: forall procs source proc _procs proc' _conts x sz t to off isz,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = BspPushReg x sz :: _conts ->
+                    iexpr s pid x = ValuePtr (AnyPtr t (Goodptr t to off)) ->
+                    iexpr s pid sz = ValueI64 (Posz isz) ->
+                    
+                    proc' = ps_mod_queue_push (cons $ Push (AnyPtr t (Goodptr t to off)) isz) (ps_mod_cont (const _conts) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+| ss_bsp_pop pid: forall procs source proc _procs proc' _conts x  t to off,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = BspPopReg x :: _conts ->
+                    iexpr s pid x = ValuePtr (AnyPtr t (Goodptr t to off)) ->
+                    proc' = ps_mod_queue_pop (cat [:: Pop (AnyPtr t (Goodptr t to off)) ]) (ps_mod_cont (const _conts) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+
+| ss_bsp_get pid: forall procs source proc _procs proc' _conts pid_from src offset dest sz npid_from t source_base source_offset ioffset  dest_base dest_offset nsz query,
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = BspGet pid_from  src offset dest sz :: _conts ->
+                    iexpr s pid pid_from = ValueI64 (Posz npid_from) ->
+                    iexpr s pid src = ValuePtr (AnyPtr t ((Goodptr t source_base source_offset) ))->
+                    iexpr s pid offset = ValueI64 ioffset ->
+                    iexpr s pid dest = ValuePtr (AnyPtr t (Goodptr t dest_base dest_offset))  ->
+                    iexpr s pid sz = ValueI64 (Posz nsz) ->
+                    query = Get t npid_from ((Goodptr t source_base source_offset) ) ioffset (Goodptr t dest_base dest_offset) nsz ->
+                    proc' = ps_mod_queue_get (cons query) (ps_mod_cont (const _conts) proc) ->
+                    s' = MGood (insert_at pid proc' _procs) source ->
+                    ss_reduce s s'
+
+| ss_sync_end: forall procs source,
+                     s = MGood procs source ->
+                     should_sync s ->
+                     all (negb \o has_bsp_queues) procs ->
+                     s' = remove_sync_statements s ->
+                     ss_reduce s s'
+                               
+| ss_sync_pop: forall procs source _procs ,
+                 s = MGood procs source ->
+                 should_sync s ->
+                 has should_pop procs ->
+                 s' = apply_pop_regs s ->
+                 s' = MGood _procs source ->
+                 ss_reduce s s'
+| ss_sync_push: forall procs source _procs ,
+                 s = MGood procs source ->
+                 should_sync s ->
+                 all (negb \o should_pop) procs ->
+                 has should_push procs ->
+                 s' = apply_push_regs s ->
+                 s' = MGood _procs source ->
+                 ss_reduce s s'
+                           
+| ss_sync_get pid: forall procs source proc _procs proc' _conts,
+                 s = MGood procs source ->
+                 should_sync s ->
+                 all (fun p => (~~ should_pop p) && (~~should_push p)) procs ->
+                 osplit_seq pid procs = (Some proc, _procs) ->
+                 
+                 proc' = ps_mod_cont (const _conts) proc ->
+                 s' = MGood (insert_at pid proc' _procs) source ->
+                 ss_reduce s s'
+                              
+| ss_sync_put pid from_pid: forall procs source _procs proc' proc f  q qs s'' procs'',
+                 s = MGood procs source ->
+                 should_sync s ->
+                 all (fun p => (~~ should_pop p) && (~~should_push p) && (~~ should_get p)) procs ->
+                 osplit_seq pid procs = (Some proc, _procs) ->
+                 should_put proc ->
+                 option_nth (proc_queue_put proc) from_pid =  Some (q :: qs) ->
+                 f = put_query_to_ms_transform pid q ->
+                 proc' = ps_mod_queue_put (mod_at nil from_pid (const qs) ) proc ->
+                 s'' = f ( MGood (insert_at pid proc' _procs) source ) ->
+                 s'' = Some s' ->
+                 s' = MGood procs'' source ->
+                 ss_reduce s s'
+.
+
+Definition bs := clos_refl_trans_1n _ ss_reduce.
+
+ 
+Theorem proc_state_eq_dec: eq_dec proc_state.
+  rewrite /eq_dec.
+  move => [pid1 vd1 get1 put1 pop1 push1 mem1 stats1 locs1]
+            [pid2 vd2 get2 put2 pop2 push2 mem2 stats2 locs2].
+  move: (nat_eq_dec pid1 pid2) => [Hpid|Hpid].
+  move: (seq_eq_dec _ (seq_eq_dec _ (var_descr_eq_dec)) vd1 vd2) => [Hvd|Hvd].
+  move: (seq_eq_dec _ (seq_eq_dec _ put_query_eq_dec) put1 put2) => [Hput|Hput].
+  move: (seq_eq_dec _ (get_query_eq_dec
+
+  Theorem state_eq_dec: eq_dec machine_state.
+  rewrite /eq_dec.
+  case.
+  
+Theorem t : forall s s', s = empty_state 1  -> s = s' \/ ~ bs s s'.
+  move=> s s' H; subst.
+  compute.
+  destruct 
+  compute => H.
+  
+  done.
+  destruct H.
+  
+  dependent induction H.
+  
+  
+Theorem  t : forall s, s = empty_state 1 -> exists m: machine_state-> nat, forall s' , bs (empty_state 1) s' -> m s' < m s \/ s = s'.
+  move=> s ->. clear s.
+  Compute empty_state 1.
+  exists (fun s=> match s with
+                    | MGood [:: mk_proc_state 0 nil nil nil nil nil nil nil nil] nil => 1
+                    | _ => 0
+                  end).
+  move=> s' H.
+ dependent induction H.
+   by right.
+   compute in H.
+inversion H.
+destruct pid.
+inversion H1.
+rewrite <-H7 in H2; compute in H2.
+inversion H2.
+rewrite <-H9 in H3.
+done.
+
+subst.
+done.
+
+inversion H3.
+
+done.
+rewrite H9 in H3.
+
+destruct H.
+  done.
+  
+  destruct x.
+  compute.
+  
+  simpl.
+  compute in H.
+  induction H.
+  simpl.
+  destruct H.
+  admit.
+  simpl.
+  
+  
+
+(*  Inductive clos_refl_trans_1n (x: A) : A -> Prop :=
+    | rt1n_refl : clos_refl_trans_1n x x
+    | rt1n_trans (y z:A) :
+         R x y -> clos_refl_trans_1n y z -> clos_refl_trans_1n x z.
+*)
+
+(* BspPut 
+synchronization (when everyone is BSPsync)
+- pops
+- pushes (only if there are no pops)
+- perform get (only if there ...)
+- perform put (only if ... )
+exit sync (when everyone is bspsync but nothing to sync)
+hpput/hpget
+*)
+
+Definition should_perform_pops := 
+Definition state_from_statement n stmt : machine_state :=
+  state_from_main n $ mk_fun 0 "main" nil stmt .
+
+
+Inductive bs_reduce (s s': machine_state) : Prop :=
+| execution_results trace: transformations s trace = s' -> bs_reduce s s'
+.
+
+Section Tests.
+  Definition empty_state_fb (bspnproc:nat) body :machine_state :=
+  let procs := map (fun pid=> mk_proc_state pid nil nil nil nil nil nil nil nil) (iota 0 bspnproc) in
+  MGood procs [:: mk_fun 0 "main" nil body ].
+
+
+  Lemma ss_reduce_skip: ss_reduce (state_from_statement 1 Skip) (empty_state_fb 1 Skip).
+    eapply (ss_skip _ _ 0); by compute; eauto. Qed.
+End Tests.
+
+
+Let dummy_state := state_from_main 4 $ mk_fun 0 "main" nil Skip.
+
+
 
 Fixpoint interpreter_step (ms: machine_state) : machine_state :=
   let pex_state := prod (prod error_code  (statement?)) proc_state in
@@ -490,8 +871,7 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
           let eval := iexpr ms pid in
           match cur_statement with
             | Skip => skip
-            | Call fname fargs =>
-              
+            | Call fname fargs =>              
               match get_fun ms fname with
                 | Some f =>
                   let prologue := prologue_for ms pid f fargs in
@@ -606,7 +986,6 @@ Fixpoint interpreter_step (ms: machine_state) : machine_state :=
       end
   in
   match ms with
-    | MNeedSync _ _ _ => ms
     | MBad _ _ => ms
     | MGood pstates funcs =>
       let synchronize: machine_state->machine_state := remove_sync_statements \o apply_puts \o
@@ -760,7 +1139,6 @@ Lemma good_origin ms l fs ol ofs: interpreter_step ms = MGood l fs -> ms = MGood
   move=> /nilP => H.
   rewrite /proc_conts in H.
   destruct ps.
-  compute.
   unfold terminated.
   move /nilP.
   subst.
