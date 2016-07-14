@@ -525,6 +525,7 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                     proc' = ps_mod_queue_get (cons query) (ps_mod_cont (const _conts) proc) ->
                     s' = MGood (insert_at pid proc' _procs) source ->
                     ss_reduce s s'
+(* OK *)
 | ss_bsp_put pid: forall procs source proc _procs
                          eto_pid edest eoffset esource esize
                          to_pid
@@ -552,52 +553,6 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                     s'' = MGood (insert_at pid proc' _procs) source ->
                     s' = ms_add_put_queries to_pid pid  (AnyPtr tdest (Goodptr tdest bdest odest))  offset vals s'' ->
                     ss_reduce s s'
-
-
-    
-(* !! *) (*
-
-                | BspPut to_pid dest offset source size => 
-                  match eval to_pid, eval dest, eval offset, eval source, eval size with
-                    | ValueI64 (Posz to_pid),
-                      ValuePtr (AnyPtr _ destptr),
-                      ValueI64 (Posz noffset),
-                      ValuePtr (AnyPtr _ sourceptr),
-                      ValueI64 (Posz size) =>
-                      if is_goodptr sourceptr && is_goodptr destptr then
-                        match read_memory ms pid (AnyPtr _ sourceptr) size with
-                          | Some (read_type, vals)=>
-                            ms_add_put_queries to_pid pid (AnyPtr _ destptr)  noffset vals ms
-
-                          | _ => bad_with InvalidPut
-                        end
-                      else bad_with InvalidPut
-                    | _, _, _, _, _ => bad_with InvalidPut
-                  end
-
-| ss_bsp_put pid: forall procs source proc _procs proc' _conts epid edest eoffset esource esize to_pid tdest dest_base dest_offset offset tsource source_base source_offset sourceptr destptr sz_bytes read_type _dstptr  ___procs ___fs s'' vals otherproc ,
-                    s = MGood procs source ->
-                    osplit_seq pid procs = (Some proc, _procs) ->
-                    proc_conts proc = (BspPut epid edest eoffset esource esize) :: _conts ->
-                    iexpr s pid epid = ValueI64 (Posz to_pid) ->
-                    iexpr s pid edest = ValuePtr (AnyPtr tdest destptr) ->
-                    iexpr s pid eoffset = ValueI64 (Posz offset) ->
-                    iexpr s pid esource = ValuePtr (AnyPtr tsource sourceptr) ->
-                    iexpr s pid esize = ValueI64 (Posz sz_bytes) ->
-                    
-                    destptr = Goodptr tdest dest_base dest_offset ->
-                    sourceptr = Goodptr tsource source_base source_offset ->
-
-                    
-                    Some (read_type, vals) = read_memory s pid (AnyPtr tsource sourceptr) sz_bytes ->
-                    ptr_add destptr offset = Some _dstptr ->
-                    proc' = ps_advance proc ->
-                    s'' = MGood (insert_at pid proc' _procs) source ->
-                    Some otherproc = option_find (fun p=> proc_id p == to_pid) (ms_procs s'')  -> 
-                    s' = ms_add_put_queries otherproc proc' (AnyPtr tdest destptr) offset vals  s''->
-                    s' = MGood ___procs ___fs ->                       
-                    ss_reduce s s'
-*)
 
 (* OK *)
 | ss_sync_end: forall procs source,
@@ -634,7 +589,7 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                  proc' = ps_mod_cont (const _conts) proc ->
                  s' = MGood (insert_at pid proc' _procs) source ->
                  ss_reduce s s'
-                          
+(* OK *)                          
 | ss_sync_put pid from_pid: forall procs source _procs proc' proc  q qs b newo o ioff t v regsize  __procs __fs,
                  s = MGood procs source ->
                  all ps_should_sync procs ->
@@ -655,16 +610,12 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                  s' = MGood __procs __fs ->
                                                                                                     
                  ss_reduce s s'
-
 .
 
 Definition bs_reduce := clos_refl_trans_1n _ ss_reduce.
 
 
 
-
-
-(*Theorem test_skip: ss_reduce (MGood [:: ps ] _) (MGood [:: ] _).*)
 Definition is_goodptr {T} (p:ptr T) := match p with | Goodptr _ _  => true | _ => false end.
 
 Definition interpret_ss (ms:machine_state) (pid:nat) : machine_state :=
@@ -729,12 +680,8 @@ Definition interpret_ss (ms:machine_state) (pid:nat) : machine_state :=
                 | Leave => match proc_symbols s with
                              | nil => bad_with GenericError
                              | ctx::css => ok_with $ ( mark_deallocated ctx)  (ps_mod_syms (const css) news)
-                           (*match apply_writes Deallocated s ctx with
-                                         | (OK, state) => ok_with (ps_mod_syms (const css) state)
-                                         | (code, s) => err code 
-                                       end*)
                            end                        
-                | BspSync => loop (* wait for sync = error code? *)
+                | BspSync => loop
                 | BspPushReg x sz =>
                   match eval x, eval sz with
                     | ValuePtr (AnyPtr t  (Goodptr to off)),  ValueI64 (Posz sz) =>
