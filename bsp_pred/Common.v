@@ -1,4 +1,4 @@
-From mathcomp.ssreflect Require Import ssreflect ssrnat ssrbool eqtype seq ssrnat.
+From mathcomp.ssreflect Require Import ssreflect ssrnat ssrbool eqtype seq ssrnat ssrfun.
 From mathcomp.algebra Require Import ssrint.
 From Coq.Strings Require Import Ascii String.
 Require Import Coq.Logic.Eqdep.
@@ -118,15 +118,33 @@ Theorem t: eq_dec (int* nat).
   eq_compi a c.
   eq_compi b d.
 Qed.
-          
+
+Definition uncurry {a b c} (f: a -> b -> c) :  (a * b) -> c :=
+  fun x => match x with
+             | (m,n) => f m n
+           end.
+
+
+
   
 (*** seq helpers *)
+
+Definition zip_with {T U V} (f: T -> U -> V) (s1: seq T) (s2: seq U) : seq V :=
+  map (uncurry f) (zip s1 s2).
+
 Fixpoint  zipwith_when_eqlength {A B} (f: A->B->bool) (x: seq A) (y: seq B) : bool :=
   match x,y with
     | x::xs, y::ys => f x y &&  zipwith_when_eqlength f xs ys
     | nil, nil => true
     | nil, _ | _, nil => false
   end.     
+
+Definition annotate_l {T U} (f: T->U) (s:seq T) : seq (U * T) :=
+  zip (map f s) s.
+
+
+Definition not_empty {T} (s: seq T) := size s > 0.
+
 
 Theorem seq_eq_dec {T}: eq_dec T -> eq_dec ( seq T ).
   rewrite /eq_dec.
@@ -149,6 +167,14 @@ Fixpoint  fill {T} (v: T)  (sz: nat)  : seq T :=
 
 Definition transformations {A} (init:A) (ts: seq (A->A)) : A :=
   foldl (fun x f=> f x) init ts.
+Fixpoint mon_transformations {A} (s:A) (ts: seq (A -> (A ?))) : A? :=
+  match ts with
+      | t :: ts => match t s with 
+                     | Some s => mon_transformations s ts
+                     | None => None
+                   end
+      | nil => Some s
+  end.
 
 
 
@@ -157,7 +183,13 @@ Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
   match filter p s with
     | nil => None
     | x::_ => Some x
-    end.
+  end.
+
+Definition option_find_pos {T} (p: T-> bool) (s:seq T) : option nat :=
+  let idx := find p s in
+  if idx == size s then None else Some idx.
+
+  
 
 Definition option_nth {T:Type} (s:seq T) (n: nat) := nth None (map (@Some _) s) n.
 
@@ -204,12 +236,6 @@ Canonical option_eqType (t:eqType) := EqType (option t) (option_eqMixin t).
 
 
 
-Definition uncurry {a b c} (f: a -> b -> c) :  (a * b) -> c :=
-  fun x => match x with
-             | (m,n) => f m n
-           end.
-
-
 
 Fixpoint seq_unsome {T} (s: seq (option T)) : option (seq T) :=
   match s with
@@ -241,9 +267,30 @@ Definition option_bind {T U} (f:T-> U?) (x:T?) :=
     | None => None
   end.
                               
+(*** Arithmetics ***)
 
 Definition add_n_z (x:nat) (y:int) :=
   match intZmod.addz x y with
     | Negz r => None
     | Posz r => Some r
+
   end.
+
+Definition divn x := fst \o div.edivn x.
+Definition remn x := snd \o div.edivn x.
+
+
+Definition div_sgn x y := match x,y with
+                            | Posz _, Posz _
+                            | Negz _, Negz _ => Posz 1
+                            | _,_ => Negz 1
+                          end.
+                                                            
+
+Definition idiv x y := intRing.mulz (div_sgn x y)
+                                    match x,y with
+                                      | Posz x, Posz y 
+                                      | Negz x, Negz y
+                                      | Posz x, Negz y
+                                      | Negz x, Posz y => fst (div.edivn x y)
+                                    end.

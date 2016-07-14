@@ -1,5 +1,5 @@
 
-all: Common.vo Types.vo State.vo Syntax.vo Memory.vo 
+all: Common.vo Types.vo State.vo Syntax.vo Memory.vo Operational.vo
 
 Common.vo: Common.v
 	coqc Common.v
@@ -15,6 +15,9 @@ Memory.vo: Common.vo Types.vo Memory.v
 
 Syntax.vo: Common.vo Types.vo Memory.vo  Syntax.v
 	coqc Syntax.v
+
+Operational.vo: Common.vo Syntax.vo Types.vo State.vo Memory.vo Operational.v
+	coqc Operational.v
 
 clean:
 	rm *.vo *.glob

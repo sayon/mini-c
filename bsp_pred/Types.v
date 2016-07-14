@@ -173,7 +173,7 @@ Inductive anyptr := |AnyPtr t : ptr t-> anyptr.
          move=> t p t0 p0.
          eq_compi t0 t.
          eq_compi p0 p.
-      Qed.
+      Defined.
       
       Canonical anyptr_eqMixin := EqMixin ( reflect_from_dec anyptr_eq_dec ).
       Canonical anyptr_eqType := EqType anyptr anyptr_eqMixin.
@@ -349,10 +349,44 @@ Definition for_eq_carriers {R} (x y: ctype) (def:R)
 Defined.
 
 
+Definition num_value (num:numeric) : int->value :=
+  match num with
+    | S8 => ValueI8
+    | U8 => ValueU8
+    | S16 => ValueI16
+    | U16 => ValueU16
+    | S32 => ValueI32
+    | U32 => ValueU32
+    | S64 => ValueI64
+    | U64 => ValueU64
+  end.
+
 
        
 Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=
   match p with
     | Nullptr => None
-    | Goodptr b o => @Some _ $ Goodptr t b $ add_n_z o z
+    | Goodptr b o => @Some _ $ Goodptr t b $ add_n_z o (intRing.mulz z ( size_of t))
+  end.
+
+
+Definition int_from_value v : int ? :=
+    match v with
+    | ValueI64 x
+    | ValueI32 x
+    | ValueI16 x
+    | ValueI8 x 
+    | ValueU64 x
+    | ValueU32 x
+    | ValueU16 x
+    | ValueU8 x => Some x
+    | _ => None
+    end.
+
+                     
+
+Definition ptr_add_val p v : value :=
+  match int_from_value v, p with
+    | Some i, AnyPtr t (Goodptr b o) => Error
+    | _, _ => Error
   end.

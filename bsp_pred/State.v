@@ -24,7 +24,7 @@ Inductive get_query := Get t:  nat-> ptr t-> int -> ptr t -> nat -> get_query .
     Canonical get_query_eqType := EqType get_query get_query_eqMixin.
 
    
-Inductive put_query := Put t: value -> ptr t -> nat -> put_query .
+Inductive put_query := Put t: value -> ptr t -> int -> put_query .
 
    Theorem put_query_eq_dec: eq_dec put_query.
      rewrite /eq_dec.
@@ -175,13 +175,21 @@ Inductive machine_state :=
 | MGood: seq proc_state -> seq function -> machine_state
 | MBad:  seq (error_code * proc_state) -> seq function -> machine_state.
 
+
     Theorem machine_state_eq_dec: eq_dec machine_state.
       move => x y. case x; case y; try by [right;discriminate]; clear x y;
       move=> l f ll ff; eq_comp (seq_eq_dec function_eq_dec) ff f.
       by eq_comp (seq_eq_dec proc_state_eq_dec) ll l.
       by eq_comp (seq_eq_dec (pair_eq_dec error_code_eq_dec proc_state_eq_dec)) ll l.
     Qed.        
-        
+
+    
+Definition bad_state (pid: nat) (ec: error_code) (src: machine_state) : machine_state :=
+  match src with
+      | MBad _ _  => src
+      | MGood procs fs => MBad (map (fun p => if pid == proc_id p then pair ec p else pair OK p) procs) fs
+  end.
+
 Definition ms_source s := match s with | MGood _ f | MBad  _  f => f end.
 Definition ms_procs s := match s with | MGood p _ => p | MBad p _ => map snd p end.
 
@@ -201,8 +209,7 @@ Definition add_var (vd: var_descr) := ps_mod_syms
                                                    | cons x xs => cons (cons vd x) xs
                                                  end).
 
-
-
+Definition proc_count (ms:machine_state) : nat := size $ ms_procs ms.
 
 Definition ms_mod_proc_all (f:proc_state->proc_state) (ms:machine_state) :=
   match ms with
@@ -305,8 +312,6 @@ Definition mem_fill_block (bid:nat) (val:value) (ps: proc_state): proc_state :=
   mem_mod_block bid block_trans ps.
 
 
-Definition divn x := fst \o div.edivn x.
-Definition remn x := snd \o div.edivn x.
 
 Definition dereference (ps: proc_state) (v:value) : value :=
   match v with
@@ -329,4 +334,77 @@ Definition dereference (ps: proc_state) (v:value) : value :=
 
 
 
-(* TODO: handle byte sizes instead of elements' counts *)
+
+Definition ms_mod_proc_option (pid:nat) (f: proc_state -> proc_state? ) (ec: error_code) (ms:machine_state) : machine_state :=
+  match ms with
+    | MBad _ _ => ms
+    | MGood procs fs =>
+      let bad :=  MBad ( map (fun p => pair (if proc_id p == pid then ec else OK) p) procs) fs in
+      match option_nth procs pid with
+        | Some proc => match f proc with
+                         | Some newproc => ms_mod_proc pid (const newproc) ms
+                         | None => bad
+                       end
+        | _ => bad
+      end
+  end.
+
+
+
+Definition has_bsp_queues ps := match ps with
+                                  | mk_proc_state _ _ nil nil nil nil _ _ _ nil nil => false
+                                  | _ => true
+                                end.
+
+Definition ps_should_sync ps := match proc_conts ps with | BspSync :: _ => true  | _ => false end.
+                                 
+Definition ms_should_sync (ms:machine_state) :=
+  all  ps_should_sync (ms_procs ms).
+
+
+Definition not_empty {T} (s: seq T) := size s > 0.
+
+Definition ps_should_pop ps : bool := (ps_should_sync ps) &&  (not_empty $ proc_queue_pop_reg ps) .
+
+Definition ps_should_push ps : bool := (ps_should_sync ps) && (~~ ps_should_pop ps) && (not_empty $ proc_queue_push_reg ps ).
+
+Definition ps_should_get ps : bool := (ps_should_sync ps)
+                                     && (~~ ps_should_pop ps)
+                                     && (~~ ps_should_push ps)
+                                     && (not_empty $ proc_queue_get ps ).
+Definition ps_should_put ps : bool := (ps_should_sync ps)
+                                     && (~~ ps_should_pop ps)
+                                     && (~~ ps_should_push ps)
+                                     && (~~ ps_should_get ps)
+                                     && (has not_empty $ proc_queue_put ps ).
+
+
+Definition  remove_sync_statements (ms:machine_state) : machine_state :=
+  ms_mod_proc_all (ps_mod_cont (drop 1)) ms.
+
+
+Definition ps_advance := ps_mod_cont (drop 1).
+
+
+Definition alloc_block (ps: proc_state) (b:block) : proc_state := ps_mod_mem (cat [:: b] ) ps.
+
+Definition next_block_id : proc_state -> nat := size \o proc_memory.
+
+
+Definition fill_block_raw (bid : nat) (v:value) :=
+  ps_mod_mem (mod_at ErrorBlock bid (block_mod_cont (map (const v)))).
+
+Definition mark_deallocated vds ps : proc_state :=
+  let f (p : var_descr)  := match p with
+                                      | declare_var _ _ bid => fill_block_raw bid Deallocated
+                                    end in
+  transformations ps $ map f vds.
+
+Definition registered {T} (pt: ptr T) (pr:proc_state) : anyptr * nat ? :=
+  match pt with
+    | Goodptr b o =>
+      let pred x y := match x with | AnyPtr _ (Goodptr bb oo) =>  (bb == b) && (oo == o) | _ => false end in
+      option_find (uncurry pred) (proc_registered_locs pr)
+    | _ => None
+  end.
+
