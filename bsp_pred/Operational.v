@@ -7,7 +7,6 @@ Import intZmod.
 
 Require Import Coq.Relations.Relation_Operators.
 
- 
 Require Import Common Syntax Types State Memory.
 
 
@@ -169,8 +168,6 @@ Fixpoint iexpr (ms:machine_state) (pid:nat) (e:expr) : value :=
 
 
 Definition ex_block : block := mk_block Stack 0 64 Int64 (fill Garbage 8).
-
-(* FIXME maybe we should implement type changes ? *)
 
 
 Definition is_value_true {ps:proc_state} (v: value) : bool ? :=
@@ -361,6 +358,8 @@ Definition put_queries (dest_ps:proc_state) (to_reg_location_at: nat?) (offset: 
 Definition ms_add_put_queries_raw (dest_pid src_pid: nat) (queries: seq put_query) :machine_state -> machine_state :=
   ms_mod_proc dest_pid (ps_mod_queue_put (mod_at nil src_pid (cat queries))).
 
+
+
 Definition ms_add_put_queries (dest_pid src_pid :nat) (src_regptr: anyptr) (offset: nat) (vals:seq value) (ms:machine_state) : machine_state :=
   match ms with
       | MGood procs fs =>
@@ -376,8 +375,40 @@ Definition ms_add_put_queries (dest_pid src_pid :nat) (src_regptr: anyptr) (offs
       | _ => ms
   end.
 
+Definition corresponding_ptr (src dest: proc_state) (p: anyptr) : (anyptr * nat) ? :=
+  match  option_find_pos (anyptr_same p \o fst) (proc_registered_locs src) with
+    | Some pos => option_nth (proc_registered_locs dest) pos
+    | None => None
+    end.
 
-         
+Definition ptr_oshift t o i := addn o (muln (size_of t) i).
+
+Definition hpput_queries (srcsrcptr destdestptr: anyptr) (offset sz: nat) : seq hpput_query ? :=
+  match srcsrcptr, destdestptr with
+      | AnyPtr t (Goodptr sb so), AnyPtr t' (Goodptr db do) =>
+        Some $ map (fun i => HpPutQuery (AnyPtr t  $ Goodptr t sb $ ptr_oshift t so i) destdestptr $ ptr_oshift t offset i) (iota 0 sz)
+      | _, _ => None
+  end.
+      
+                                                                             
+(* src issues HpPut *)
+Definition ms_add_hpput_queries (pid to_pid: nat) (srcsrc srcdest: anyptr) (destoffset sz: nat) (ms:machine_state) : machine_state :=
+  match option_nth (ms_procs ms) to_pid, option_nth (ms_procs ms) pid with
+    | Some srcproc, Some destproc =>
+      match corresponding_ptr srcproc destproc srcdest with
+        | Some (destdest, regsize) => if regsize >= sz
+                                    then
+                                      match hpput_queries srcsrc destdest destoffset sz with
+                                          | Some queries =>
+                                            ms_mod_proc to_pid  (ps_mod_queue_hpput (mod_at nil pid (cat queries))) ms
+                                          | None => bad_state pid InvalidHpPut ms
+                                      end                                                              
+                                  else bad_state pid InvalidHpPut ms
+        | _ => bad_state pid InvalidHpPut ms
+      end
+    | _, _ => bad_state pid GenericError ms
+  end.
+                                                         
 
 
 Inductive ss_reduce (s s' : machine_state) : Prop :=
@@ -731,12 +762,23 @@ Definition interpret_ss (ms:machine_state) (pid:nat) : machine_state :=
                     | _, _, _, _, _ => bad_with InvalidPut
                   end
                     
-                | BspHpPut to_pid dest offset source size => skip
+                | BspHpPut to_pid dest offset source size =>   match eval to_pid, eval dest, eval offset, eval source, eval size with
+                    | ValueI64 (Posz to_pid),
+                      ValuePtr (AnyPtr _ destptr),
+                      ValueI64 (Posz noffset),
+                      ValuePtr (AnyPtr _ sourceptr),
+                      ValueI64 (Posz sz) =>
+                      if is_goodptr sourceptr && is_goodptr destptr then
+                        ms_mod_proc pid ps_advance $ 
+                            ms_add_hpput_queries to_pid pid (AnyPtr _ sourceptr) (AnyPtr _ destptr) noffset  sz ms
+                      else bad_with InvalidPut
+                    | _, _, _, _, _ => bad_with InvalidPut
+                  end
+                                                                 
                 | BspHpGet pid_from source offset dest size => skip
                                   
               end
           end
-      
     end.
 Definition IntPtr b o:=  AnyPtr Int64 ( Goodptr _ b o).
 Definition VIntPtr b o := ValuePtr $ IntPtr b o.
@@ -745,38 +787,6 @@ Definition LocVarBlock id t v := mk_block Stack id (size_of t) t [:: v].
 Definition LocVarBlockInt64 id v := LocVarBlock id Int64 (ValueI64 v).
 
 
-Definition test_put_state := MGood
-                                     [::
-                                        mk_proc_state
-                                        0
-                                        nil
-                                        nil
-                                        [:: nil ; nil ]
-                                        nil
-                                        nil
-                                        [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11]
-                                        nil
-                                        [:: ( IntPtr 0 0, 8 )]
-                                        nil
-                                        nil ;
-                                       mk_proc_state
-                                         1
-                                         nil
-                                         nil
-                                         [:: nil; nil]
-                                         nil
-                                         nil
-                                         [:: LocVarBlockInt64 0 4; LocVarBlockInt64 1 5; LocVarBlockInt64 2 6 ]
-                                         [:: BspPut (Lit $ ValueI64 0)
-                                            (Lit $ VIntPtr 1 0)
-                                            (Lit $ ValueI64 0)
-                                            (Lit $ VIntPtr 0 0)
-                                            (Lit $ ValueI64 8) ]
-                                        
-                                         [:: ( IntPtr 1 0, 8 )]
-
-                                         nil
-                                         nil ] nil.     
-
-
-
+(* TODO : Add hpput test here -> test operational *)
+(* TODO : same for hpget *)
+(* TODO : axiomatic semantics *)

@@ -41,9 +41,39 @@ Inductive put_query := Put t: value -> ptr t -> int -> put_query .
     Canonical put_query_eqType := EqType put_query put_query_eqMixin.
     Canonical Structure put_query_dec_eq_mixin := mk_dec_eq put_query put_query_eq_dec.
 
-  
+Inductive hpput_query := HpPutQuery: anyptr -> anyptr -> nat -> hpput_query.
 
-    Inductive push_query := Push: anyptr -> nat -> push_query.
+    Theorem hpput_query_eq_dec : eq_dec hpput_query.
+      move=> [src dst off] [src' dst' off'].
+      eq_compi src src'.
+      eq_compi dst dst'.
+      eq_compi off off'.
+    Qed.
+
+    Definition hpput_query_eqP := reflect_from_dec hpput_query_eq_dec.
+    
+    Canonical hpput_query_eqMixin := EqMixin hpput_query_eqP.
+    Canonical hpput_query_eqType := EqType hpput_query hpput_query_eqMixin.
+    Canonical Structure hpput_query_dec_eq_mixin := mk_dec_eq hpput_query hpput_query_eq_dec.
+
+
+Inductive hpget_query := HpGetQuery: anyptr -> anyptr -> nat -> hpget_query.
+
+    Theorem hpget_query_eq_dec : eq_dec hpget_query.
+      move=> [src dst off] [src' dst' off'].
+      eq_compi src src'.
+      eq_compi dst dst'.
+      eq_compi off off'.
+    Qed.
+
+    Definition hpget_query_eqP := reflect_from_dec hpget_query_eq_dec.
+    
+    Canonical hpget_query_eqMixin := EqMixin hpget_query_eqP.
+    Canonical hpget_query_eqType := EqType hpget_query hpget_query_eqMixin.
+    Canonical Structure hpget_query_dec_eq_mixin := mk_dec_eq hpget_query hpget_query_eq_dec.
+
+        
+Inductive push_query := Push: anyptr -> nat -> push_query.
     Theorem push_query_eq_dec: eq_dec push_query.
       move=> [p_x s_x] [p_y s_y].
       eq_compi p_x p_y.
@@ -76,8 +106,8 @@ Record proc_state := mk_proc_state {
                          proc_memory: seq block;
                          proc_conts: seq statement;
                          proc_registered_locs: seq ( anyptr * nat );
-                         proc_queue_hpput: seq (seq (anyptr * value));
-                         proc_queue_hpget: seq (seq (anyptr * value))
+                         proc_queue_hpput: seq (seq hpput_query );
+                         proc_queue_hpget: seq (seq hpget_query )
                        }.
 Definition ps_mod_f
            mod_syms    
@@ -152,8 +182,8 @@ Definition ps_mod_queue_hpget  f := ps_mod id id id id id id id id id f .
       eq_comp (seq_eq_dec (dec_from_reflect block_eqP)) u uu.
       eq_comp (seq_eq_dec statement_eq_dec) i ii.
       eq_comp (seq_eq_dec (pair_eq_dec anyptr_eq_dec nat_eq_dec)) o oo.
-      eq_comp (seq_eq_dec (seq_eq_dec (pair_eq_dec  anyptr_eq_dec value_eq_dec))) p pp.
-      eq_comp (seq_eq_dec (seq_eq_dec (pair_eq_dec  anyptr_eq_dec value_eq_dec))) l ll.
+      eq_comp (seq_eq_dec (seq_eq_dec hpput_query_eq_dec)) p pp.
+      eq_comp (seq_eq_dec (seq_eq_dec hpget_query_eq_dec)) l ll.
     Qed.
 
     Definition proc_state_eqP := reflect_from_dec proc_state_eq_dec.
@@ -162,7 +192,7 @@ Definition ps_mod_queue_hpget  f := ps_mod id id id id id id id id id f .
     Canonical Structure proc_dec_eq_mixin := mk_dec_eq proc_state proc_state_eq_dec.
 
     
-Inductive error_code := | OK | BadPointer | ModNonExistingBlock | PointerOutsideBlock| BadWriteLocation | TypeMismatch | WritingGarbage | NonExistingSymbol | GenericError | InvalidPopReg | InvalidPushReg | InvalidGet | InvalidPut.
+Inductive error_code := | OK | BadPointer | ModNonExistingBlock | PointerOutsideBlock| BadWriteLocation | TypeMismatch | WritingGarbage | NonExistingSymbol | GenericError | InvalidPopReg | InvalidPushReg | InvalidGet | InvalidPut | InvalidHpPut | InvalidHpGet.
     Scheme Equality for error_code.
     Canonical error_code_eqMixin := EqMixin (reflect_from_dec error_code_eq_dec).
     Canonical error_code_eqType := EqType error_code error_code_eqMixin.
@@ -207,6 +237,7 @@ Definition add_var (vd: var_descr) := ps_mod_syms
                                         (fun s=> match s with
                                                    | nil => cons [::vd] nil
                                                    | cons x xs => cons (cons vd x) xs
+
                                                  end).
 
 Definition proc_count (ms:machine_state) : nat := size $ ms_procs ms.
@@ -233,41 +264,11 @@ Definition ms_for_proc {T} (ms:machine_state) (pid:nat) (f: proc_state -> T) : T
 Definition ms_mod_proc (pid:nat) (f:proc_state->proc_state) : machine_state->machine_state :=
   ms_mod_proc_all (fun p=> if proc_id p == pid then f p else p).
 
-(*
-Definition can_write (b:block) (i:nat) (v:value) : error_code :=
-  match option_nth (contents b) i, v with
-    | Some Garbage, val => if el_type b == type_of_val val then OK else TypeMismatch
-    | Some Deallocated, _ => BadWriteLocation
-    | Some _, Deallocated => WritingGarbage
-    | Some _, Error => GenericError
-    | Some _, Garbage => WritingGarbage
-    | Some Error, _ => GenericError
-    | None, _ => BadWriteLocation
-    | Some vx, vy  => if (el_type b == type_of_val vy) && (el_type b == type_of_val vx) then OK else TypeMismatch
-  end.
-
-
-Definition mem_write  (bid:nat) (pos: nat) (val:value) (ps: proc_state): (error_code * proc_state) :=
-  let m := proc_memory ps in
-  let oldblock := option_nth m bid in
-  match oldblock with
-    | Some oldblock =>
-      let err_code_write := can_write oldblock pos val in
-      if err_code_write == OK then
-        let newblockcnt := set_nth val (contents oldblock) pos val in
-        let newblock := block_mod_cont (const newblockcnt) oldblock in
-        let newmem := set_nth ErrorBlock m bid newblock in
-        (OK, ps_mod_mem (const newmem) ps)
-      else (err_code_write , ps)
-    | None => (ModNonExistingBlock, ps)
-  end.*)
-
 Definition regenerate_block (b:block) (newtype: ctype) : block :=
   let new_seq_len := fst $ div.edivn (block_size b) (size_of newtype) in
                              block_mod id id id (const newtype) (const (fill Garbage new_seq_len ) ) b.
                         
 
-           
 Definition write (bid:nat) (offset_bytes: nat) (new_val:value) (ps:proc_state) : error_code * proc_state :=
   match option_nth (proc_memory ps) bid with
     | Some old_block =>
@@ -300,16 +301,15 @@ Definition write_to (pid bid offset_bytes : nat) new_val ms :machine_state :=
 Definition mem_mod_block (bid:nat) (f:block->block) (ps:proc_state) : proc_state :=
   ps_mod_mem (mod_at ErrorBlock bid f) ps.
 
+
 Definition mem_fill_block (bid:nat) (val:value) (ps: proc_state): proc_state :=
   let block_trans := block_mod id id id match val with
                          | Garbage 
                          | Deallocated 
                          | Error => id
                          | x =>  const $ type_of_val x 
-                       end (map (const val))
-  in
- 
-  mem_mod_block bid block_trans ps.
+                                        end (map (const val))
+  in mem_mod_block bid block_trans ps.
 
 
 
@@ -326,13 +326,6 @@ Definition dereference (ps: proc_state) (v:value) : value :=
       end
     | _ => Error
   end.
-
-
-
-
-
-
-
 
 
 Definition ms_mod_proc_option (pid:nat) (f: proc_state -> proc_state? ) (ec: error_code) (ms:machine_state) : machine_state :=
@@ -358,33 +351,36 @@ Definition has_bsp_queues ps := match ps with
 
 Definition ps_should_sync ps := match proc_conts ps with | BspSync :: _ => true  | _ => false end.
                                  
+
 Definition ms_should_sync (ms:machine_state) :=
   all  ps_should_sync (ms_procs ms).
 
 
 Definition not_empty {T} (s: seq T) := size s > 0.
 
+
 Definition ps_should_pop ps : bool := (ps_should_sync ps) &&  (not_empty $ proc_queue_pop_reg ps) .
 
+
 Definition ps_should_push ps : bool := (ps_should_sync ps) && (~~ ps_should_pop ps) && (not_empty $ proc_queue_push_reg ps ).
+
 
 Definition ps_should_get ps : bool := (ps_should_sync ps)
                                      && (~~ ps_should_pop ps)
                                      && (~~ ps_should_push ps)
                                      && (not_empty $ proc_queue_get ps ).
+
 Definition ps_should_put ps : bool := (ps_should_sync ps)
                                      && (~~ ps_should_pop ps)
                                      && (~~ ps_should_push ps)
                                      && (~~ ps_should_get ps)
                                      && (has not_empty $ proc_queue_put ps ).
 
-
 Definition  remove_sync_statements (ms:machine_state) : machine_state :=
   ms_mod_proc_all (ps_mod_cont (drop 1)) ms.
 
 
 Definition ps_advance := ps_mod_cont (drop 1).
-
 
 Definition alloc_block (ps: proc_state) (b:block) : proc_state := ps_mod_mem (cat [:: b] ) ps.
 
@@ -396,8 +392,8 @@ Definition fill_block_raw (bid : nat) (v:value) :=
 
 Definition mark_deallocated vds ps : proc_state :=
   let f (p : var_descr)  := match p with
-                                      | declare_var _ _ bid => fill_block_raw bid Deallocated
-                                    end in
+                              | declare_var _ _ bid => fill_block_raw bid Deallocated
+                            end in
   transformations ps $ map f vds.
 
 Definition registered {T} (pt: ptr T) (pr:proc_state) : anyptr * nat ? :=
@@ -407,4 +403,3 @@ Definition registered {T} (pt: ptr T) (pr:proc_state) : anyptr * nat ? :=
       option_find (uncurry pred) (proc_registered_locs pr)
     | _ => None
   end.
-
