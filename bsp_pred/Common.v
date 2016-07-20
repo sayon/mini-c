@@ -178,6 +178,9 @@ Fixpoint mon_transformations {A} (s:A) (ts: seq (A -> (A ?))) : A? :=
 
 
 
+Definition option_subrange {T} (from sz: nat) (s: seq T) : (seq T ) ? :=
+  if size s >= from + sz then Some (take sz (drop from s)) else None.
+
 
 Definition option_find {T:Type} (p: T -> bool) (s:seq T): option T :=
   match filter p s with

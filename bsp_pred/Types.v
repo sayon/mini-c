@@ -301,6 +301,8 @@ reflexivity.
 reflexivity.
 Defined.
 
+Definition is_goodptr {T} (p:ptr T) := match p with | Goodptr _ _  => true | _ => false end.
+
 
 Definition for_eq_carriers {R} (x y: ctype) (def:R)
             (fint: int->int->R)
@@ -361,6 +363,9 @@ Definition num_value (num:numeric) : int->value :=
     | U64 => ValueU64
   end.
 
+Definition aptr_type p := match p with
+                            | AnyPtr t _ => t
+                          end.
 
        
 Definition ptr_add {t} (p: ptr t) (z:int) : ptr t ? :=

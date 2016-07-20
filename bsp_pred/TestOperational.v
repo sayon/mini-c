@@ -1,13 +1,16 @@
 From mathcomp Require Import ssreflect seq ssrint ssrfun.  
 From Coq.Strings Require Import Ascii String.
 Require Import Coq.Program.Basics.  
-
-Require Import Syntax Common State Types State Memory.  
-
  
-Require Import Operational.    
+Require Import Syntax Common State Types State Memory.  
+    
+
+Require Import Operational.     
 
 Open Scope string.
+
+Definition iptr b o := AnyPtr Int64 $ Goodptr Int64 b o.
+
 
 Definition testfun instr := mk_fun 0 "main" nil instr.
 Definition tproc pid  cont : proc_state := mk_proc_state pid nil nil nil nil nil nil cont nil nil nil.
@@ -31,8 +34,14 @@ Theorem test_skip_bs: bs_reduce (teststate Skip) (empty2 Skip).
   by eapply ss_implies_bs ; eapply (ss_skip _ _ 1).
 Qed.
 
-
 Definition reduce_interp s := ss_reduce s (interpret_ss s 1).
+
+
+
+
+
+(*** TESTS ***)
+
 
 Theorem test_skip': reduce_interp (teststate Skip).
   by eapply (ss_skip _ _ 1).
@@ -434,4 +443,174 @@ Definition test_sync_put_state' :=  MGood
 
 Theorem test_sync_put : ss_reduce test_sync_put_state test_sync_put_state'.
 by  eapply (ss_sync_put _ _ 0 1).
+Qed.
+
+
+
+Definition test_hpput_state :=  MGood [::
+                                        mk_proc_state
+                                        0
+                                        nil
+                                        nil
+                                        [:: nil ; nil ]
+                                        nil
+                                        nil
+                                        [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11]
+                                        nil
+                                        [:: ( IntPtr 0 0, 8 )]
+                                        nil
+                                        nil ;
+                                       mk_proc_state
+                                         1
+                                         nil
+                                         nil
+                                         [:: nil; nil]
+                                         nil
+                                         nil
+                                         [:: LocVarBlockInt64 0 4; LocVarBlockInt64 1 5; LocVarBlockInt64 2 6 ]
+                                         [:: BspHpPut (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 2 0)
+                                            (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 1 0)
+                                            (Lit $ ValueI64 8) ]
+                                        
+                                         [:: ( IntPtr 2 0, 8 )]
+
+                                         nil
+                                         nil ] nil.     
+
+Theorem test_hpput: reduce_interp test_hpput_state.
+    by  eapply (ss_bsp_hpput _ _ 1).
+Qed.
+
+
+
+
+
+
+Definition test_hpget_state :=  MGood [::
+                                        mk_proc_state
+                                        0
+                                        nil
+                                        nil
+                                        [:: nil ; nil ]
+                                        nil
+                                        nil
+                                        [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11]
+                                        nil
+                                        [:: ( IntPtr 0 0, 8 )]
+                                        nil
+                                        nil ;
+                                       mk_proc_state
+                                         1
+                                         nil
+                                         nil
+                                         [:: nil; nil]
+                                         nil
+                                         nil
+                                         [:: LocVarBlockInt64 0 4; LocVarBlockInt64 1 5; LocVarBlockInt64 2 6 ]
+                                         [:: BspHpGet (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 2 0)
+                                            (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 1 0)
+                                            (Lit $ ValueI64 8) ]
+                                        
+                                         [:: ( IntPtr 2 0, 8 )]
+
+                                         nil
+                                         nil ] nil.     
+
+Compute interpret_ss test_hpget_state 1.
+
+Theorem test_hpget: reduce_interp test_hpget_state.
+  by  eapply (ss_bsp_hpget _ _ 1); try done.
+Qed.
+
+  
+
+
+Definition test_hpput_sync: ss_reduce ( MGood [::
+                                                 mk_proc_state 0 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11;
+                                                  LocVarBlockInt64 2 12; LocVarBlockInt64 3 13 ]
+                                                 [:: BspSync]
+                                                 [:: (iptr 0 0, 8 ) ]
+                                                 [:: nil; [::
+                                                             HpPutQuery
+                                                             (iptr 1 0)
+                                                             (iptr 0 0)
+                                                             0] ]
+                                                 nil ;
+                                                
+                                                 mk_proc_state 1 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 20; LocVarBlockInt64 1 21;
+                                                  LocVarBlockInt64 2 22; LocVarBlockInt64 3 23 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 1 0 , 8 ) ]
+                                                 [:: nil; nil]
+                                                 nil 
+                                              ] [::] )
+                                      (
+                                        MGood [::
+                                                 mk_proc_state 0 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 21; LocVarBlockInt64 1 11;
+                                                  LocVarBlockInt64 2 12; LocVarBlockInt64 3 13 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 0 0, 8 ) ]
+                                                 [:: nil; [::] ]
+                                                 nil ;
+                                                
+                                                 mk_proc_state 1 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 20; LocVarBlockInt64 1 21;
+                                                  LocVarBlockInt64 2 22; LocVarBlockInt64 3 23 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 1 0 , 8 ) ]
+                                                 [:: nil; nil]
+                                                 nil 
+      ] [::] ).
+ by eapply (ss_sync_hpput _ _ 0 1).
+Qed.
+
+
+Definition test_hpget_sync: ss_reduce ( MGood [::
+                                                 mk_proc_state 0 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11;
+                                                  LocVarBlockInt64 2 12; LocVarBlockInt64 3 13 ]
+                                                 [:: BspSync]
+                                                 [:: (iptr 0 0, 8 ) ]
+                                                 nil
+                                                 [:: nil; [::
+                                                             HpGetQuery
+                                                             (iptr 1 0)
+                                                             (iptr 0 0)
+                                                             0] ]
+                                                 ;
+                                                
+                                                 mk_proc_state 1 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 20; LocVarBlockInt64 1 21;
+                                                  LocVarBlockInt64 2 22; LocVarBlockInt64 3 23 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 1 0 , 8 ) ]
+                                                 nil
+                                                 nil 
+                                              ] [::] )
+                                      (
+                                        MGood [::
+                                                 mk_proc_state 0 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 21; LocVarBlockInt64 1 11;
+                                                  LocVarBlockInt64 2 12; LocVarBlockInt64 3 13 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 0 0, 8 ) ]
+                                                 nil
+                                                 [:: nil; nil]  ;
+                                                
+                                                 mk_proc_state 1 nil nil nil nil nil
+                                                 [:: LocVarBlockInt64 0 20; LocVarBlockInt64 1 21;
+                                                  LocVarBlockInt64 2 22; LocVarBlockInt64 3 23 ]
+                                                 [:: BspSync]
+                                                 [:: ( iptr 1 0 , 8 ) ]
+                                                 nil
+                                                 nil
+      ] [::] ).
+  by eapply (ss_sync_hpget _ _ 0 1).
 Qed.

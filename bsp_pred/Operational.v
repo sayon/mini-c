@@ -6,7 +6,7 @@ Require Import Program.
 Import intZmod.
 
 Require Import Coq.Relations.Relation_Operators.
-
+ 
 Require Import Common Syntax Types State Memory.
 
 
@@ -56,9 +56,6 @@ Definition unop_interp (t:ctype) (op:unop) x : value  :=
   
 Definition find_block (ps: proc_state) (i: nat)  : option block :=
   option_find (fun b=> block_id b == i) $ proc_memory ps.
-
-Definition option_subrange {T} (from sz: nat) (s: seq T) : (seq T ) ? :=
-  if size s >= from + sz then Some (take sz (drop from s)) else None.
 
 Definition read_proc_memory (ps:proc_state) (p: anyptr) (sz: nat) : (ctype * seq value) ? :=
   match p with
@@ -242,14 +239,6 @@ Definition state_from_main (bspnproc:nat) (f:function) :machine_state :=
   MGood procs [::f].
 
 
-Definition push_reg_to_p_transform (p:push_query): proc_state -> proc_state :=
-  match p with
-    | Push pt sz => ps_mod_reg_loc (cons (pt, sz))
-  end.
-
-Definition push_reg_to_ms_transform (frompid: nat) (p:push_query) :machine_state -> machine_state :=
-  ms_mod_proc frompid ( push_reg_to_p_transform p ).
-
 Definition apply_push_regs_procs ps : proc_state ? :=
   match (proc_queue_push_reg ps) with
     | (Push p sz) ::_ => Some $ ps_mod_reg_loc (cons (p,sz)) $ ps_mod_queue_push (drop 1) ps
@@ -385,11 +374,13 @@ Definition ptr_oshift t o i := addn o (muln (size_of t) i).
 
 Definition hpput_queries (srcsrcptr destdestptr: anyptr) (offset sz: nat) : seq hpput_query ? :=
   match srcsrcptr, destdestptr with
-      | AnyPtr t (Goodptr sb so), AnyPtr t' (Goodptr db do) =>
-        Some $ map (fun i => HpPutQuery (AnyPtr t  $ Goodptr t sb $ ptr_oshift t so i) destdestptr $ ptr_oshift t offset i) (iota 0 sz)
+    | AnyPtr t (Goodptr sb so), AnyPtr t' (Goodptr db do) =>
+      if remn sz (size_of t) == 0 then
+        Some $ map (fun i => HpPutQuery (AnyPtr t  $ Goodptr t sb $ ptr_oshift t so i) destdestptr $ ptr_oshift t offset i) (iota 0 (divn sz (size_of t)))
+      else None
       | _, _ => None
   end.
-      
+
                                                                              
 (* src issues HpPut *)
 Definition ms_add_hpput_queries (pid to_pid: nat) (srcsrc srcdest: anyptr) (destoffset sz: nat) (ms:machine_state) : machine_state :=
@@ -408,7 +399,87 @@ Definition ms_add_hpput_queries (pid to_pid: nat) (srcsrc srcdest: anyptr) (dest
       end
     | _, _ => bad_state pid GenericError ms
   end.
-                                                         
+
+
+
+
+Definition IntPtr b o:=  AnyPtr Int64 ( Goodptr _ b o).
+Definition VIntPtr b o := ValuePtr $ IntPtr b o.
+
+Definition LocVarBlock id t v := mk_block Stack id (size_of t) t [:: v].
+Definition LocVarBlockInt64 id v := LocVarBlock id Int64 (ValueI64 v).
+
+
+
+
+Definition test_hpget_state :=  MGood [::
+                                        mk_proc_state
+                                        0
+                                        nil
+                                        nil
+                                        [:: nil ; nil ]
+                                        nil
+                                        nil
+                                        [:: LocVarBlockInt64 0 10; LocVarBlockInt64 1 11]
+                                        nil
+                                        [:: ( IntPtr 0 0, 8 )]
+                                        nil
+                                        [:: nil; nil] ;
+                                       mk_proc_state
+                                         1
+                                         nil
+                                         nil
+                                         [:: nil; nil]
+                                         nil
+                                         nil
+                                         [:: LocVarBlockInt64 0 4; LocVarBlockInt64 1 5; LocVarBlockInt64 2 6 ]
+                                         [:: BspHpGet (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 2 0)
+                                            (Lit $ ValueI64 0)
+                                            (Lit $ VIntPtr 1 0)
+                                            (Lit $ ValueI64 8) ]
+                                        
+                                         [:: ( IntPtr 2 0, 8 )]
+
+                                         nil
+                                         [:: nil; nil]
+                                      ] nil.     
+
+
+
+
+
+
+
+
+Definition hpget_queries (srcsrcptr destdestptr: anyptr) (offset sz: nat) : seq hpget_query ? :=
+  match srcsrcptr, destdestptr with
+    | AnyPtr t (Goodptr sb so), AnyPtr t' (Goodptr db do) =>
+      if remn sz (size_of t) == 0 then
+        Some $ map (fun i => HpGetQuery (AnyPtr t  $ Goodptr t sb $ ptr_oshift t so i) destdestptr $ ptr_oshift t offset i) (iota 0 (divn sz (size_of t)))
+      else None
+      | _, _ => None
+  end.
+
+                                                                             
+
+Definition ms_add_hpget_queries (from_pid pid: nat) (to_src to_dest: anyptr) (src_offset sz: nat) (ms:machine_state) : machine_state :=
+  match option_nth (ms_procs ms) from_pid, option_nth (ms_procs ms) pid with
+    | Some from_proc, Some proc =>
+      match corresponding_ptr proc from_proc to_src with
+        | Some (from_src, regsize) =>
+          if regsize >= sz
+          then match hpget_queries from_src to_dest src_offset sz with
+                 | Some queries =>
+                   ms_mod_proc from_pid  (ps_mod_queue_hpget (mod_at nil pid (cat queries))) ms
+                 | None => bad_state pid GenericError ms
+               end
+          else bad_state pid GenericError ms
+        | None => bad_state pid GenericError ms (* !!! *)
+      end
+    | _,_ => bad_state pid GenericError ms
+  end.
+
 
 
 Inductive ss_reduce (s s' : machine_state) : Prop :=
@@ -585,6 +656,68 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                     s' = ms_add_put_queries to_pid pid  (AnyPtr tdest (Goodptr tdest bdest odest))  offset vals s'' ->
                     ss_reduce s s'
 
+
+
+(* OK *)
+| ss_bsp_hpput pid: forall procs source proc _procs
+                         eto_pid edest eoffset esource esize
+                         to_pid
+                         tdest odest bdest
+                         offset
+                         tsource bsource osource
+                         sz
+                         
+                         proc' _conts s'' ,
+                    
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+                    proc_conts proc = BspHpPut eto_pid edest eoffset esource esize :: _conts ->
+
+                    iexpr s pid eto_pid = ValueI64 (Posz to_pid) ->
+                    iexpr s pid edest = ValuePtr (AnyPtr tdest (Goodptr tdest bdest odest)) ->
+                    
+                    iexpr s pid eoffset = ValueI64 (Posz offset) ->
+                    iexpr s pid esource = ValuePtr (AnyPtr tsource (Goodptr tsource bsource osource )) ->
+                    iexpr s pid esize = ValueI64 (Posz sz) ->
+                   
+                    proc' = ps_advance proc ->
+                    s'' = MGood (insert_at pid proc' _procs) source ->
+                    s' = ms_add_hpput_queries to_pid pid (AnyPtr tsource (Goodptr tsource bsource osource))
+                                              (AnyPtr tdest (Goodptr tdest bdest odest)) offset sz s'' ->
+                    ss_reduce s s'
+
+(* OK *)
+| ss_bsp_hpget pid: forall procs source proc _procs
+                         epid_from edest eoffset esrc esize
+                         pid_from
+                         tdest odest bdest
+                         offset
+                         tsrc bsrc osrc
+                         sz
+                         
+                         proc' _conts s'' ,
+                    
+                    s = MGood procs source ->
+                    osplit_seq pid procs = (Some proc, _procs) ->
+
+                    (* pid source offset dest size *)
+                    proc_conts proc = BspHpGet epid_from esrc eoffset edest esize :: _conts ->
+
+                    iexpr s pid epid_from = ValueI64 (Posz pid_from) ->
+                    iexpr s pid esrc = ValuePtr (AnyPtr tsrc (Goodptr tsrc bsrc osrc)) ->
+                    
+                    iexpr s pid eoffset = ValueI64 (Posz offset) ->
+                    iexpr s pid edest = ValuePtr (AnyPtr tdest (Goodptr tdest bdest odest )) ->
+                    iexpr s pid esize = ValueI64 (Posz sz) ->
+                    
+                    proc' = ps_advance proc ->
+                    s'' = MGood (insert_at pid proc' _procs) source ->
+                    s' = ms_add_hpget_queries pid_from pid
+                                              (AnyPtr tsrc (Goodptr tsrc bsrc osrc))
+                                              (AnyPtr tdest (Goodptr tdest bdest odest))
+                                              offset sz s'' ->
+                    ss_reduce s s' 
+                              
 (* OK *)
 | ss_sync_end: forall procs source,
                      s = MGood procs source ->
@@ -641,13 +774,67 @@ Inductive ss_reduce (s s' : machine_state) : Prop :=
                  s' = MGood __procs __fs ->
                                                                                                     
                  ss_reduce s s'
+(* OK *)
+| ss_sync_hpput to_pid from_pid: forall procs source
+                                        to_proc _procs
+                                        from_proc _procs'
+                                        src p ps _oldputs
+                                        t val
+                                        
+                                        tdest bdest odest  off
+                                        s'' 
+                                        _newprocs
+                                        ,
+                    s = MGood procs source ->
+
+                    osplit_seq to_pid procs = (Some to_proc, _procs) ->
+                    osplit_seq from_pid procs = (Some from_proc, _procs') ->
+                    
+                    osplit_seq from_pid (proc_queue_hpput to_proc) = (Some (p::ps), _oldputs) ->
+                    p = HpPutQuery src (AnyPtr tdest (Goodptr tdest bdest odest)) off  ->
+                    read_proc_memory from_proc src (size_of (aptr_type src)) = Some (t, val::nil) ->
+                    t = tdest ->
+                    s'' = ms_mod_proc to_pid (ps_mod_queue_hpput (mod_at nil from_pid (const ps))) s ->
+                    s' = write_memory s'' to_pid bdest (ptr_oshift t odest off) [:: val] ->
+                    s' = MGood _newprocs source ->
+                    ss_reduce s s'
+
+(* OK *)
+| ss_sync_hpget to_pid from_pid: forall procs source
+                                        to_proc _procs
+                                        from_proc _procs'
+                                        src p ps _oldgets
+                                        t val
+                                        
+                                        tdest bdest odest  off
+                                        s'' 
+                                        _newprocs
+                                        ,
+                    s = MGood procs source ->
+
+                    osplit_seq to_pid procs = (Some to_proc, _procs) ->
+                    osplit_seq from_pid procs = (Some from_proc, _procs') ->
+                    
+                    osplit_seq from_pid (proc_queue_hpget to_proc) = (Some (p::ps), _oldgets) ->
+                    p = HpGetQuery src (AnyPtr tdest (Goodptr tdest bdest odest)) off  ->
+                    read_proc_memory from_proc src (size_of (aptr_type src)) = Some (t, val::nil) ->
+                    t = tdest ->
+                    s'' = ms_mod_proc to_pid (ps_mod_queue_hpget (mod_at nil from_pid (const ps))) s ->
+                    s' = write_memory s'' to_pid bdest (ptr_oshift t odest off) [:: val] ->
+                    s' = MGood _newprocs source ->
+                    ss_reduce s s'
+
+
+
+                              
+(* Hpget; 
+ Test for sync hpput and hpget *)
 .
 
 Definition bs_reduce := clos_refl_trans_1n _ ss_reduce.
 
 
 
-Definition is_goodptr {T} (p:ptr T) := match p with | Goodptr _ _  => true | _ => false end.
 
 Definition interpret_ss (ms:machine_state) (pid:nat) : machine_state :=
     match osplit_seq pid (ms_procs ms) with
@@ -775,18 +962,33 @@ Definition interpret_ss (ms:machine_state) (pid:nat) : machine_state :=
                     | _, _, _, _, _ => bad_with InvalidPut
                   end
                                                                  
-                | BspHpGet pid_from source offset dest size => skip
+                | BspHpGet pid_from source offset dest size =>
+                  match eval pid_from, eval source, eval offset, eval dest, eval size with
+                    | ValueI64 (Posz from_pid),
+                      ValuePtr (AnyPtr _ sourceptr),
+                      ValueI64 (Posz noffset),
+                      ValuePtr (AnyPtr _ destptr),
+                      ValueI64 (Posz sz) =>
+                      if is_goodptr sourceptr && is_goodptr destptr then
+                        ms_mod_proc pid ps_advance $ 
+                            ms_add_hpget_queries from_pid  pid (AnyPtr _ sourceptr) (AnyPtr _ destptr) noffset  sz ms
+                      else bad_with InvalidPut
+                    | _, _, _, _, _ => bad_with GenericError
+                  end
+                
                                   
               end
           end
     end.
+
+
+
+(*
 Definition IntPtr b o:=  AnyPtr Int64 ( Goodptr _ b o).
 Definition VIntPtr b o := ValuePtr $ IntPtr b o.
 
 Definition LocVarBlock id t v := mk_block Stack id (size_of t) t [:: v].
 Definition LocVarBlockInt64 id v := LocVarBlock id Int64 (ValueI64 v).
-
-
-(* TODO : Add hpput test here -> test operational *)
+*)
 (* TODO : same for hpget *)
 (* TODO : axiomatic semantics *)
